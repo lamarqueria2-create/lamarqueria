@@ -1765,7 +1765,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock}) {
         if (confirmar(opciones)) {
           const pedidosSinDup = pedidos.filter(function(p){return parseInt(p.folio) !== folioFinal;});
           const item = Object.assign({},form,{folio:folioFinal,anticipo:parseFloat(form.anticipo)||0,items:items,productos:productosMeta});
-          setPedidos(pedidosSinDup.concat([Object.assign({},item,{id:"p"+uid()})]));
+          setPedidos(pedidosSinDup.concat([Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()})]));
           setNid(n => n+1);
           setMF(false);
           return;
@@ -1814,10 +1814,10 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock}) {
         setPedidos(nuevos);
       } else {
         // No encontrado: agregar como nuevo con id único
-        setPedidos(pedidos.concat([Object.assign({},item,{id:"p"+uid()})]));
+        setPedidos(pedidos.concat([Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()})]));
       }
     } else {
-      setPedidos(pedidos.concat([Object.assign({},item,{id:"p"+uid()})]));
+      setPedidos(pedidos.concat([Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()})]));
       setNid(n => n+1);
     }
     setMF(false);
