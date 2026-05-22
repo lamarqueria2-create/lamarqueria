@@ -4803,20 +4803,21 @@ function App() {
         molduras: molduras,
         temas: temas
       });
-      // Content-Type text/plain es el único que pasa con no-cors desde archivo local
-      // Apps Script lo lee igual desde e.postData.contents
       fetch(SHEETS_URL, {
         method: "POST",
-        mode: "no-cors",
         headers: {"Content-Type": "text/plain"},
         body: payload
-      }).then(function() {
-        // Con no-cors la respuesta es opaca (normal), asumimos guardado exitoso
+      }).then(function(r) { return r.json(); })
+      .then(function(data) {
         setGuardando(false);
-        setGuardadoAt(new Date().toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"}));
-      }).catch(function() {
+        if (data && data.ok) {
+          setGuardadoAt(new Date().toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"}));
+        } else {
+          setGuardadoAt("\u26a0\ufe0f " + (data && data.error ? data.error.substring(0,40) : "Error al guardar"));
+        }
+      }).catch(function(err) {
         setGuardando(false);
-        setGuardadoAt("⚠️ Error de red");
+        setGuardadoAt("\u26a0\ufe0f " + (err && err.message ? err.message.substring(0,40) : "Error de red"));
       });
     }, 3000);
   }, [pedidos, cotizaciones, ventasPOS, costos, gastos, stock, insumos, molduras, temas]);
