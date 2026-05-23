@@ -1014,7 +1014,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
         const thumbnail = canvas.toDataURL('image/jpeg', 0.68);
         setProductos(function(prev){ return prev.map(function(p){ return p.id===pid ? Object.assign({},p,{imagen:thumbnail, subiendo:false}) : p; }); });
         // Subir original a Drive en paralelo
-        fetch(SHEETS_URL, {
+        fetch(API_URL, {
           method:'POST', headers:{"Content-Type":"text/plain"},
           body: JSON.stringify({accion:'subir_imagen', imagen:base64Original, nombre:'cotizacion_producto'})
         }).then(r=>r.json()).then(data=>{
@@ -1953,7 +1953,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock}) {
           return prod ? prod.titulo : "imagen";
         })() || "imagen";
 
-        fetch(SHEETS_URL, {
+        fetch(API_URL, {
           method: 'POST',
           headers: {"Content-Type": "text/plain"},
           body: JSON.stringify({
@@ -2004,7 +2004,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock}) {
     
     // Si existe fileId, eliminar de Drive
     if (prod.fileId) {
-      fetch(SHEETS_URL, {
+      fetch(API_URL, {
         method: 'POST',
         headers: {"Content-Type": "text/plain"},
         body: JSON.stringify({
@@ -4597,7 +4597,16 @@ const TABS = [
   {id:"bases",label:"Bases de Datos",icon:"🗄️",color:"#37474F",desc:"Stock, molduras, insumos, temas"},
 ];
 
-const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzECEbtnrBoiIKLTs8aOONOVBi3a6qF3uz8cjpdAwflcdk4GckithNSIY09ThGcRn_t/exec";
+// ══════════════════════════════════════════════════════
+//  BACKEND: 'postgres' | 'sheets'
+//  Para volver a Sheets: cambia a 'sheets' y sube a GitHub
+// ══════════════════════════════════════════════════════
+const BACKEND = 'postgres';
+
+const SHEETS_URL  = "https://script.google.com/macros/s/AKfycbzECEbtnrBoiIKLTs8aOONOVBi3a6qF3uz8cjpdAwflcdk4GckithNSIY09ThGcRn_t/exec";
+const POSTGRES_URL = "https://lamarqueria.taileb249f.ts.net"; // ← poner URL de Tailscale Funnel
+
+const API_URL = BACKEND === 'postgres' ? POSTGRES_URL + '/api' : SHEETS_URL;
 
 const ErrorBoundary = (function(){
   function EB(props) {
@@ -4730,7 +4739,7 @@ function App() {
   const primeraVez = React.useRef(true);
 
   React.useEffect(function() {
-    fetch(SHEETS_URL + "?accion=leer_todo")
+    fetch(API_URL + "?accion=leer_todo")
       .then(function(r) { return r.json(); })
       .then(function(resp) {
         // El nuevo script devuelve {ok:true, data:{...}}
@@ -4803,7 +4812,7 @@ function App() {
         molduras: molduras,
         temas: temas
       });
-      fetch(SHEETS_URL, {
+      fetch(API_URL, {
         method: "POST",
         headers: {"Content-Type": "text/plain"},
         body: payload
