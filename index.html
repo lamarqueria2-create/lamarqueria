@@ -2599,9 +2599,15 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
   }
   function save() {
     if (!form.concepto || !form.monto) return;
-    const item = Object.assign({},form,{id:editId||nid,monto:parseFloat(form.monto)||0});
-    if (editId) setRegistros(registros.map(r => r.id===editId?item:r));
-    else { setRegistros(registros.concat([item])); setNid(n => n+1); }
+    const idFinal = (editId !== null && editId !== undefined && editId !== "") ? editId : nid;
+    const item = Object.assign({},form,{id:idFinal,monto:parseFloat(form.monto)||0});
+    const existe = registros.some(r => r.id===idFinal);
+    if (editId && existe) {
+      setRegistros(registros.map(r => r.id===editId?item:r));
+    } else {
+      setRegistros(registros.concat([item]));
+      setNid(n => n+1);
+    }
     setModal(false);
   }
 
@@ -4760,6 +4766,20 @@ function App() {
   const wsRef = React.useRef(null);
   const pedidosCargadosCount = React.useRef(0);
 
+  // Asigna IDs únicos y elimina duplicados exactos (mismo concepto+monto+fecha+categoria)
+  function dedupRegistros(arr, prefijo) {
+    const vistos = {};
+    const resultado = [];
+    arr.forEach(function(r, i) {
+      const firma = [r.concepto||"", r.monto||"", r.fecha||"", r.categoria||"", r.nota||""].join("|");
+      if (vistos[firma]) return; // duplicado exacto, lo saltamos
+      vistos[firma] = true;
+      const id = (r.id !== undefined && r.id !== null && r.id !== "") ? r.id : (prefijo + "_" + Date.now() + "_" + i);
+      resultado.push(Object.assign({}, r, {id: id}));
+    });
+    return resultado;
+  }
+
   function cargarDatos(esRemoto) {
     return fetch(API_URL + "?accion=leer_todo")
       .then(function(r) { return r.json(); })
@@ -4792,8 +4812,8 @@ function App() {
           setNextFolioQ(Math.max.apply(null, fqs) + 1);
         }
         if (data.ventas_pos && data.ventas_pos.length > 0) setVentasPOS(data.ventas_pos.map(function(v){ return Object.assign({},v,{items:parsearJSON(v.items)}); }));
-        if (data.costos && data.costos.length > 0) setCostos(data.costos);
-        if (data.gastos && data.gastos.length > 0) setGastos(data.gastos);
+        if (data.costos && data.costos.length > 0) setCostos(dedupRegistros(data.costos, 'c'));
+        if (data.gastos && data.gastos.length > 0) setGastos(dedupRegistros(data.gastos, 'g'));
         if (data.stock && data.stock.length > 0) setStock(data.stock);
         if (data.insumos && data.insumos.length > 0) setInsumos(data.insumos);
         // Solo sobreescribir molduras si Sheets tiene MAS o IGUAL que las locales (preserva carga inicial del HTML)
