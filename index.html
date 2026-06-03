@@ -4601,7 +4601,7 @@ const TABS = [
 //  BACKEND: 'postgres' | 'sheets'
 //  Para volver a Sheets: cambia a 'sheets' y sube a GitHub
 // ══════════════════════════════════════════════════════
-const BACKEND = 'postgres';
+const BACKEND = 'sheets';
 
 const SHEETS_URL  = "https://script.google.com/macros/s/AKfycbzECEbtnrBoiIKLTs8aOONOVBi3a6qF3uz8cjpdAwflcdk4GckithNSIY09ThGcRn_t/exec";
 const POSTGRES_URL = "https://lamarqueria.taileb249f.ts.net"; // ← poner URL de Tailscale Funnel
@@ -4758,6 +4758,7 @@ function App() {
   const primeraVez = React.useRef(true);
   const recargandoRemoto = React.useRef(false);
   const wsRef = React.useRef(null);
+  const pedidosCargadosCount = React.useRef(0);
 
   function cargarDatos(esRemoto) {
     return fetch(API_URL + "?accion=leer_todo")
@@ -4775,6 +4776,7 @@ function App() {
           }).map(normalizarPedido);
           const todos = pedidosSheets.concat(histFiltrados);
           setPedidos(todos);
+          pedidosCargadosCount.current = todos.length;
           const fs = todos.map(function(p) { return parseInt(p.folio) || 0; });
           setNextFolioBase(Math.max.apply(null, fs) + 1);
         } else if (!esRemoto && typeof PEDIDOS_HIST !== "undefined" && PEDIDOS_HIST.length > 0) {
@@ -4856,11 +4858,18 @@ function App() {
     if (recargandoRemoto.current) { recargandoRemoto.current = false; return; }
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(function() {
-      // PROTECCION ANTI-BORRADO: si todo esta vacio probablemente hubo
-      // un error de carga - no sobrescribir Sheets con vacio.
+      // PROTECCION ANTI-BORRADO 1: si todo esta vacio probablemente hubo
+      // un error de carga - no sobrescribir con vacio.
       if (pedidos.length === 0 && ventasPOS.length === 0 && cotizaciones.length === 0 && stock.length === 0) {
         console.warn("Estado vacio detectado - omitiendo guardado para proteger datos");
         setGuardadoAt("⚠️ Guardado omitido (estado vacio)");
+        return;
+      }
+      // PROTECCION ANTI-BORRADO 2: si los pedidos bajaron drasticamente respecto
+      // a lo que se cargo (>30% de perdida), probablemente fue un error de carga.
+      if (pedidosCargadosCount.current > 50 && pedidos.length < pedidosCargadosCount.current * 0.7) {
+        console.warn("Perdida masiva de pedidos detectada (" + pedidos.length + " de " + pedidosCargadosCount.current + ") - omitiendo guardado");
+        setGuardadoAt("⚠️ Guardado omitido (posible error de carga)");
         return;
       }
       setGuardando(true);
