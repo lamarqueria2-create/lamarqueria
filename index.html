@@ -4609,7 +4609,7 @@ const TABS = [
 // ══════════════════════════════════════════════════════
 const BACKEND = 'sheets';
 
-const SHEETS_URL  = "https://script.google.com/macros/s/AKfycbzECEbtnrBoiIKLTs8aOONOVBi3a6qF3uz8cjpdAwflcdk4GckithNSIY09ThGcRn_t/exec";
+const SHEETS_URL  = "https://script.google.com/macros/s/AKfycbzZZqSzoI8x54bAXjX_TTcyAivNKmjkfpgOlyMt6KnVG26IGAjKq1hCAyYEmcBD1dyQwA/exec";
 const POSTGRES_URL = "https://lamarqueria.taileb249f.ts.net"; // ← poner URL de Tailscale Funnel
 
 const API_URL = BACKEND === 'postgres' ? POSTGRES_URL + '/api' : SHEETS_URL;
@@ -4766,18 +4766,13 @@ function App() {
   const wsRef = React.useRef(null);
   const pedidosCargadosCount = React.useRef(0);
 
-  // Asigna IDs únicos y elimina duplicados exactos (mismo concepto+monto+fecha+categoria)
-  function dedupRegistros(arr, prefijo) {
-    const vistos = {};
-    const resultado = [];
-    arr.forEach(function(r, i) {
-      const firma = [r.concepto||"", r.monto||"", r.fecha||"", r.categoria||"", r.nota||""].join("|");
-      if (vistos[firma]) return; // duplicado exacto, lo saltamos
-      vistos[firma] = true;
+  // Asigna IDs únicos a registros que no lo tengan (NO elimina duplicados:
+  // dos gastos pueden tener mismos datos y ser legítimamente distintos)
+  function asegurarIds(arr, prefijo) {
+    return arr.map(function(r, i) {
       const id = (r.id !== undefined && r.id !== null && r.id !== "") ? r.id : (prefijo + "_" + Date.now() + "_" + i);
-      resultado.push(Object.assign({}, r, {id: id}));
+      return Object.assign({}, r, {id: id});
     });
-    return resultado;
   }
 
   function cargarDatos(esRemoto) {
@@ -4812,8 +4807,8 @@ function App() {
           setNextFolioQ(Math.max.apply(null, fqs) + 1);
         }
         if (data.ventas_pos && data.ventas_pos.length > 0) setVentasPOS(data.ventas_pos.map(function(v){ return Object.assign({},v,{items:parsearJSON(v.items)}); }));
-        if (data.costos && data.costos.length > 0) setCostos(dedupRegistros(data.costos, 'c'));
-        if (data.gastos && data.gastos.length > 0) setGastos(dedupRegistros(data.gastos, 'g'));
+        if (data.costos && data.costos.length > 0) setCostos(asegurarIds(data.costos, 'c'));
+        if (data.gastos && data.gastos.length > 0) setGastos(asegurarIds(data.gastos, 'g'));
         if (data.stock && data.stock.length > 0) setStock(data.stock);
         if (data.insumos && data.insumos.length > 0) setInsumos(data.insumos);
         // Solo sobreescribir molduras si Sheets tiene MAS o IGUAL que las locales (preserva carga inicial del HTML)
