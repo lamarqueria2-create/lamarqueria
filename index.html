@@ -4906,6 +4906,7 @@ function App() {
         molduras: molduras,
         temas: temas
       });
+      console.log('💾 GUARDANDO:', 'pedidos:', pedidosLimpios.length, '| ventas_pos:', ventasPOS.length, '| costos:', costos.length, '| gastos:', gastos.length, '| stock:', stock.length);
       fetch(API_URL, {
         method: "POST",
         headers: {"Content-Type": "text/plain"},
