@@ -856,7 +856,7 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
 }
 
 // ── COTIZADOR ─────────────────────────────────────────────────
-function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, setNextFolioQ, onPedidoCreado, onCotizacionCreada, setCotizadorDirty, stock, cotizacionAEditar, onLimpiarEdicion, setCotizaciones}) {
+function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, setNextFolioQ, onPedidoCreado, onCotizacionCreada, setCotizadorDirty, stock, cotizacionAEditar, onLimpiarEdicion, setCotizaciones, pedidoAEditar, onLimpiarEdicionPedido, onPedidoActualizado, onVolverAPedidos}) {
   const [alto, setAlto] = useState("");
   const [ancho, setAncho] = useState("");
   const [cat, setCat] = useState("impresion");
@@ -873,6 +873,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   const [notaCot, setNotaCot] = useState("");
   const [descCot, setDescCot] = useState("");
   const [editandoFolio, setEditandoFolio] = useState(null); // folio que estamos editando
+  const [editandoPedidoOriginal, setEditandoPedidoOriginal] = useState(null); // pedido completo (no cotización) que estamos editando
 
   // Cargar cotización para edición
   React.useEffect(function() {
@@ -921,6 +922,72 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
       if (onLimpiarEdicion) onLimpiarEdicion();
     }
   }, [cotizacionAEditar]);
+
+  // Cargar pedido existente para edición (reconstrucción cuidadosa: no perder datos de pedidos viejos)
+  React.useEffect(function() {
+    if (pedidoAEditar) {
+      const pn = normalizarPedido(pedidoAEditar);
+      // Rehidratar items: si a un item le falta productoId (pedidos viejos), se le asigna uno estable aquí mismo
+      const items = (pn.items || []).map(function(it){ return Object.assign({}, it, {productoId: it.productoId || uid()}); });
+      let prods = pn.productos || [];
+      if (!prods.length && items.length) {
+        // Pedido viejo sin metadata de productos: uno por cada productoId (ya asignado arriba)
+        const vistos = [];
+        prods = [];
+        items.forEach(function(it){
+          if (vistos.indexOf(it.productoId) < 0) { vistos.push(it.productoId); prods.push({id:it.productoId, titulo:it.nombre||"Producto", nota:"", imagen:null}); }
+        });
+      }
+      const productosReconstruidos = prods.map(function(prod){
+        const itemsProd = items.filter(function(it){return it.productoId === prod.id;});
+        const match = String(prod.titulo||"").match(/(\d+)\s*x\s*(\d+)/i);
+        return {
+          id: prod.id,
+          alto: match ? match[1] : "",
+          ancho: match ? match[2] : "",
+          nota: prod.nota || "",
+          imagen: prod.imagen || null,
+          fileId: prod.fileId || null,
+          cantidad: parseFloat(prod.cantidad) || 1,
+          esStock: !!prod.stockId,
+          titulo: prod.titulo || "Producto",
+          stockId: prod.stockId || null,
+          lineas: itemsProd.length ? itemsProd.map(function(it){
+            return {
+              id: uid(),
+              nombre: it.nombre,
+              descripcion: it.descripcion || "",
+              precio: parseFloat(it.precio) || 0,
+              costo: 0,
+              tipo: it.tipo || "insumo",
+              cat: it.cat || "impresion"
+            };
+          }) : [{id:uid(), nombre:prod.titulo||"Producto", descripcion:"", precio:0, costo:0, tipo:"insumo", cat:"impresion"}]
+        };
+      });
+      setProductos(productosReconstruidos);
+      setCliCot(pn.cliente || "");
+      setTelCot(pn.tel || "");
+      setValCot(pn.fechaEntrega || "");
+      setNotaCot(pn.nota || "");
+      // Descuento: preferir %; si el pedido viejo solo tiene $ de descuento, convertir a % equivalente para no perder el monto
+      const subtotalCalc = productosReconstruidos.reduce(function(s,p){
+        const subP = p.lineas.reduce(function(s2,l){return s2+(parseFloat(l.precio)||0);},0);
+        return s + subP * (parseFloat(p.cantidad)||1);
+      },0);
+      let descPctFinal = parseFloat(pn.descuentoPct) || 0;
+      if (!descPctFinal && parseFloat(pn.descuento) > 0 && subtotalCalc > 0) {
+        descPctFinal = (parseFloat(pn.descuento) / subtotalCalc) * 100;
+      }
+      setDescCot(descPctFinal ? String(descPctFinal) : "");
+      setEditandoPedidoOriginal(pn);
+      setLineas([]);
+      setMolSel(null);
+      setAlto("");
+      setAncho("");
+      if (onLimpiarEdicionPedido) onLimpiarEdicionPedido();
+    }
+  }, [pedidoAEditar]);
 
   const ok = alto && ancho && parseFloat(alto) > 0 && parseFloat(ancho) > 0;
   const m2 = ok ? parseFloat(alto) * parseFloat(ancho) / 10000 : 0;
@@ -1085,7 +1152,33 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
     setLineas([]);
   }
 
+  function cancelarEdicionPedido() {
+    if (editandoPedidoOriginal) {
+      if ((productos.length>0 || lineas.length>0) && !confirmar("¿Cancelar la edición de este pedido? Los cambios no guardados se perderán.")) return;
+      setProductos([]);
+      setLineas([]);
+      setMolSel(null);
+      setAlto("");
+      setAncho("");
+      setEditandoPedidoOriginal(null);
+      if (onVolverAPedidos) onVolverAPedidos();
+    } else {
+      setLineas([]);
+      setMolSel(null);
+      setProductos([]);
+      setAlto("");
+      setAncho("");
+    }
+  }
+
   return (
+    <div>
+      {editandoPedidoOriginal && (
+        <div style={{background:"#FFF3E0",border:"1px solid "+T.amber+"50",borderRadius:9,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+          <div style={{fontFamily:FS,fontSize:13,color:T.text}}>✏️ Editando pedido <b>#{editandoPedidoOriginal.folio}</b>{editandoPedidoOriginal.cliente ? " — "+editandoPedidoOriginal.cliente : ""}</div>
+          <div style={{fontFamily:FS,fontSize:11,color:T.textFade}}>El folio, estado y pagos ya hechos se conservan al actualizar.</div>
+        </div>
+      )}
     <div style={{display:"grid",gridTemplateColumns:"1fr 290px",gap:20,alignItems:"start"}}>
       <div>
         <div style={{marginBottom:18}}>
@@ -1264,9 +1357,9 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
                 <span style={{color:T.amber,fontWeight:700,fontSize:22,fontFamily:FONT}}>{fmt(totalTotal)}</span>
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                <Btn onClick={() => setModalNota(true)} style={{width:"100%",padding:"10px 0"}}>Guardar pedido #{nextFolio}</Btn>
-                <Btn variant="amber" onClick={() => setModalCot(true)} style={{width:"100%",padding:"9px 0",fontSize:12}}>{editandoFolio ? "Actualizar cotización C-"+editandoFolio : "Guardar como cotización C-"+nextFolioQ}</Btn>
-                <Btn variant="danger" size="sm" style={{width:"100%"}} onClick={() => {setLineas([]);setMolSel(null);setProductos([]);setAlto("");setAncho("");}}>Limpiar todo</Btn>
+                <Btn onClick={() => setModalNota(true)} style={{width:"100%",padding:"10px 0"}}>{editandoPedidoOriginal ? "Actualizar pedido #"+editandoPedidoOriginal.folio : "Guardar pedido #"+nextFolio}</Btn>
+                {!editandoPedidoOriginal && <Btn variant="amber" onClick={() => setModalCot(true)} style={{width:"100%",padding:"9px 0",fontSize:12}}>{editandoFolio ? "Actualizar cotización C-"+editandoFolio : "Guardar como cotización C-"+nextFolioQ}</Btn>}
+                <Btn variant="danger" size="sm" style={{width:"100%"}} onClick={cancelarEdicionPedido}>{editandoPedidoOriginal ? "Cancelar edición" : "Limpiar todo"}</Btn>
               </div>
             </div>
           )}
@@ -1275,7 +1368,18 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
           )}
         </Card>
       </div>
-      {modalNota && <ModalNota items={todosItems} productos={productosMeta} stock={stock} onClose={() => setModalNota(false)} onGuardar={p => {onPedidoCreado(p);setNextFolio(f => f+1);setLineas([]);setMolSel(null);setProductos([]);setAlto("");setAncho("");}} nextFolio={nextFolio}/>}
+      {modalNota && <ModalNota items={todosItems} productos={productosMeta} stock={stock} pedidoOriginal={editandoPedidoOriginal} descInicial={editandoPedidoOriginal ? descCot : ""} onClose={() => setModalNota(false)} onGuardar={function(p){
+        if (editandoPedidoOriginal) {
+          if (onPedidoActualizado) onPedidoActualizado(editandoPedidoOriginal, p);
+          setEditandoPedidoOriginal(null);
+          setLineas([]);setMolSel(null);setProductos([]);setAlto("");setAncho("");
+          if (onVolverAPedidos) onVolverAPedidos();
+        } else {
+          onPedidoCreado(p);
+          setNextFolio(f => f+1);
+          setLineas([]);setMolSel(null);setProductos([]);setAlto("");setAncho("");
+        }
+      }} nextFolio={nextFolio}/>}
       {modalCot && (
         <Modal title={"Cotizacion C-"+nextFolioQ} onClose={() => setModalCot(false)}>
           <Inp label="Cliente *" value={cliCot} onChange={e => setCliCot(e.target.value)}/>
@@ -1306,17 +1410,18 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
         </Modal>
       )}
     </div>
+    </div>
   );
 }
 
-function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, generarPDF}) {
-  const [cliente, setCli] = useState("");
-  const [tel, setTel] = useState("");
-  const [fechaEnt, setFE] = useState("");
-  const [anticipo, setAnt] = useState("");
-  const [metodo, setMet] = useState("Efectivo");
-  const [nota, setNota] = useState("");
-  const [descPct, setDescPct] = useState("");
+function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, generarPDF, pedidoOriginal, descInicial}) {
+  const [cliente, setCli] = useState(pedidoOriginal ? (pedidoOriginal.cliente||"") : "");
+  const [tel, setTel] = useState(pedidoOriginal ? (pedidoOriginal.tel||"") : "");
+  const [fechaEnt, setFE] = useState(pedidoOriginal ? (pedidoOriginal.fechaEntrega||"") : "");
+  const [anticipo, setAnt] = useState(pedidoOriginal ? String(parseFloat(pedidoOriginal.anticipo)||0) : "");
+  const [metodo, setMet] = useState(pedidoOriginal ? (pedidoOriginal.metodoPago||"Efectivo") : "Efectivo");
+  const [nota, setNota] = useState(pedidoOriginal ? (pedidoOriginal.nota||"") : "");
+  const [descPct, setDescPct] = useState(descInicial || "");
   const pedidoSim = {items: items, productos: productos, descuentoPct: parseFloat(descPct)||0};
   const sub = (productos && productos.length > 0) ? 
     productos.reduce(function(s,prod){
@@ -1329,14 +1434,15 @@ function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, gene
   const desMonto = sub * desPct / 100;
   const total = Math.max(0, sub - desMonto);
   const saldo = Math.max(0, total - ant);
+  const folioMostrar = pedidoOriginal ? pedidoOriginal.folio : nextFolio;
   function guardar() {
     if (!cliente) { alert("El cliente es obligatorio"); return; }
     if (!fechaEnt) { alert("La fecha de entrega es obligatoria"); return; }
-    onGuardar({folio:nextFolio,cliente:cliente,tel:tel,fechaEntrega:fechaEnt,items:items,productos:productos,anticipo:ant,metodoPago:metodo,estado:"Pendiente",nota:nota,descuentoPct:desPct,imagen:null});
+    onGuardar({folio:folioMostrar,cliente:cliente,tel:tel,fechaEntrega:fechaEnt,items:items,productos:productos,anticipo:ant,metodoPago:metodo,estado:pedidoOriginal?pedidoOriginal.estado:"Pendiente",nota:nota,descuentoPct:desPct,imagen:pedidoOriginal?(pedidoOriginal.imagen||null):null});
     onClose();
   }
   return (
-    <Modal title={"Nota #"+nextFolio} onClose={onClose} wide={true}>
+    <Modal title={pedidoOriginal ? "Actualizar pedido #"+pedidoOriginal.folio : "Nota #"+nextFolio} onClose={onClose} wide={true}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
         <div>
           <div style={{background:T.bgDark,borderRadius:8,padding:"10px 13px",marginBottom:12,border:"1px solid "+T.border}}>
@@ -1389,7 +1495,7 @@ function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, gene
       </div>
       <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
         <Btn variant="ghost" onClick={onClose}>Cancelar</Btn>
-        <Btn onClick={guardar} disabled={!cliente || !fechaEnt}>Guardar #{nextFolio}</Btn>
+        <Btn onClick={guardar} disabled={!cliente || !fechaEnt}>{pedidoOriginal ? "Actualizar #"+pedidoOriginal.folio : "Guardar #"+nextFolio}</Btn>
       </div>
     </Modal>
   );
@@ -1814,7 +1920,7 @@ function VistaHoy({atrasados, proximos, listos, calcularTotal, calcularSaldo, di
 }
 
 // ── PEDIDOS ───────────────────────────────────────────────────
-function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuevoPedido}) {
+function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuevoPedido, onEditarPedido}) {
   const [modalForm, setMF] = useState(false);
   const [modalDoc, setMD] = useState(null);
   const [modalPago, setMP] = useState(null);
@@ -1864,6 +1970,10 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
       setEid(null);
     }
     setMF(true);
+  }
+  function editarPedido(p) {
+    if (onEditarPedido) { onEditarPedido(p); }
+    else { openForm(p); }
   }
   function save() {
     if (!form.cliente) { alert("El cliente es obligatorio"); return; }
@@ -2193,7 +2303,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
           colorDiasEntrega={colorDiasEntrega}
           textoDiasEntrega={textoDiasEntrega}
           onVer={(p) => setMD(normalizarPedido(p))}
-          onEditar={openForm}
+          onEditar={editarPedido}
           onCambiar={cambiar}
         />
       ) : vista === "kanban" ? (
@@ -2259,7 +2369,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
                       <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
                         {ESTADOS_K.filter(e => e!==est&&e!=="Bodega"&&!(est==="Listo"&&e==="Entregado")).slice(0,2).map(e => <button key={e} onClick={(ev) => { ev.stopPropagation(); ev.preventDefault(); cambiar(p.id,e); }} style={{background:"rgba(0,0,0,0.05)",color:T.textSub,border:"1px solid "+T.border,borderRadius:4,padding:"2px 5px",fontSize:9,cursor:"pointer",fontFamily:FS,fontWeight:600}}>→{e}</button>)}
                         <button onClick={() => setMD(normalizarPedido(p))} style={{background:T.greenBg,color:T.green,border:"1px solid "+T.green+"30",borderRadius:4,padding:"2px 6px",fontSize:9,cursor:"pointer"}}>Ver</button>
-                        <button onClick={() => openForm(p)} style={{background:T.bgDark,color:T.textSub,border:"1px solid "+T.border,borderRadius:4,padding:"2px 5px",fontSize:9,cursor:"pointer"}}>Editar</button>
+                        <button onClick={() => editarPedido(p)} style={{background:T.bgDark,color:T.textSub,border:"1px solid "+T.border,borderRadius:4,padding:"2px 5px",fontSize:9,cursor:"pointer"}}>Editar</button>
                       </div>
                     </div>
                   );
@@ -2301,7 +2411,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
                 </div>
                 <div style={{display:"flex",gap:5}}>
                   <Btn size="sm" variant="success" onClick={() => setMD(normalizarPedido(p))}>Ver</Btn>
-                  <Btn size="sm" variant="ghost" onClick={() => openForm(p)}>Editar</Btn>
+                  <Btn size="sm" variant="ghost" onClick={() => editarPedido(p)}>Editar</Btn>
                   <Btn size="sm" variant="danger" onClick={() => { if(confirmar("¿Eliminar pedido #"+p.folio+" de "+p.cliente+"?")) setPedidos(pedidos.filter(x => x.id !== p.id)); }}>Eliminar</Btn>
                 </div>
               </Card>
@@ -2502,7 +2612,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
       {modalDoc && <ErrorBoundary><ModalDetallePedido
         pedido={modalDoc}
         onClose={() => setMD(null)}
-        onEditar={() => { setMD(null); openForm(modalDoc); }}
+        onEditar={() => { setMD(null); editarPedido(modalDoc); }}
         onEliminar={() => { if(confirmar("¿Eliminar pedido #"+modalDoc.folio+" de "+modalDoc.cliente+"?")) { setPedidos(pedidos.filter(p => String(p.folio) !== String(modalDoc.folio))); setMD(null); } }}
         onPago={() => { setMP(modalDoc); setNP(""); setNPM("Efectivo"); }}
         generarPDF={generarPDF}
@@ -4608,6 +4718,9 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
     }));
   }
 
+  // Estado: qué pedido está abierto en el modal (solo guardamos el id para leer siempre la versión viva)
+  const [modalPedidoId, setModalPedidoId] = useState(null);
+
   // Calcular progreso general por pedido
   const resumenPedidos = enProduccion.map(function(p) {
     const pn = normalizarPedido(p);
@@ -4618,13 +4731,35 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
     return {pedido:pn, tareas:t, total:all.length, completas:completas};
   });
 
+  // Agrupar por urgencia de entrega
+  const cubetas = [
+    {id:"hoy",      label:"Hoy / Atrasado", color:"#D32F2F", bg:"#FFEBEE", border:"#E0A0A0", test:function(d){return d!==null && d<=1;}},
+    {id:"proximos", label:"Próximos (2-3 días)", color:"#F57C00", bg:"#FFF3E0", border:"#F0C080", test:function(d){return d!==null && d>1 && d<=3;}},
+    {id:"despues",  label:"Después (4+ días)", color:"#388E3C", bg:"#E8F5E9", border:"#A0C0A0", test:function(d){return d===null || d>3;}}
+  ];
+  const porCubeta = cubetas.map(function(cb){
+    const items = resumenPedidos
+      .filter(function(r){ return cb.test(diasParaEntrega(r.pedido.fechaEntrega)); })
+      .sort(function(a,b){
+        const da = diasParaEntrega(a.pedido.fechaEntrega);
+        const db = diasParaEntrega(b.pedido.fechaEntrega);
+        const va = da===null ? 9999 : da;
+        const vb = db===null ? 9999 : db;
+        return va - vb;
+      });
+    return {cubeta:cb, items:items};
+  });
+
+  // Pedido vivo para el modal (leído de la lista actual, no de un snapshot)
+  const resumenModal = modalPedidoId ? resumenPedidos.find(function(r){return r.pedido.id === modalPedidoId;}) : null;
+
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
         <div>
           <div style={{fontFamily:FONT,fontSize:19,fontWeight:700}}>Flujo de Trabajo</div>
           <div style={{color:T.textFade,fontSize:11,fontFamily:FS,marginTop:2}}>
-            {enProduccion.length} pedido{enProduccion.length!==1?"s":""} en producción · Marca cada tarea al completarla
+            {enProduccion.length} pedido{enProduccion.length!==1?"s":""} en producción · Toca una tarjeta para ver y palomear sus tareas
           </div>
         </div>
       </div>
@@ -4637,133 +4772,138 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
           </div>
         </Card>
       ) : (
-        <div>
-          {/* Resumen de progreso */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:9,marginBottom:16}}>
-            {resumenPedidos.map(function(r) {
-              const pct = r.total > 0 ? (r.completas/r.total)*100 : 0;
-              const pedido = r.pedido;
-              const dias = diasParaEntrega(pedido.fechaEntrega);
-              const colorDia = colorDiasEntrega(dias);
-              const textoDia = textoDiasEntrega(dias);
-              const urg = dias!==null && dias<=1;
-              return (
-                <div key={pedido.id} style={{background:T.bgCard,border:"1px solid "+(urg?T.red+"60":T.border),borderRadius:8,padding:"9px 11px"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                    <div style={{fontFamily:FONT,fontWeight:700,fontSize:12}}>#{pedido.folio}</div>
-                    <div style={{fontFamily:FS,fontSize:10,color:T.textFade,fontWeight:600}}>{r.completas}/{r.total}</div>
-                  </div>
-                  <div style={{fontSize:11,color:T.textSub,fontFamily:FS,marginBottom:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{pedido.cliente}</div>
-                  <div style={{background:T.bgDark,borderRadius:4,height:5,overflow:"hidden"}}>
-                    <div style={{width:pct+"%",height:"100%",background:pct===100?T.green:T.amber,borderRadius:4,transition:"width 0.3s"}}/>
-                  </div>
-                  {pedido.fechaEntrega && (
-                    <div style={{marginTop:5,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                      <span style={{color:T.textFade,fontSize:10,fontFamily:FS}}>{fmtD(pedido.fechaEntrega)}</span>
-                      {dias!==null && <span style={{background:colorDia,color:"#fff",borderRadius:4,padding:"1px 6px",fontSize:9,fontFamily:FS,fontWeight:700}}>{textoDia}</span>}
-                    </div>
-                  )}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,alignItems:"start"}}>
+          {porCubeta.map(function(col){
+            const cb = col.cubeta;
+            return (
+              <div key={cb.id} style={{background:cb.bg,border:"1px solid "+cb.border,borderRadius:11,padding:"12px 10px",minHeight:200}}>
+                <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12,paddingBottom:9,borderBottom:"1px solid "+cb.border}}>
+                  <div style={{width:10,height:10,borderRadius:"50%",background:cb.color}}/>
+                  <div style={{flex:1,fontFamily:FONT,fontWeight:700,fontSize:14,color:cb.color}}>{cb.label}</div>
+                  <div style={{background:cb.color,color:"#fff",borderRadius:10,padding:"1px 8px",fontSize:10,fontWeight:700,fontFamily:FS}}>{col.items.length}</div>
                 </div>
-              );
-            })}
-          </div>
-
-          {/* Columnas por etapa */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,alignItems:"start"}}>
-            {stages.map(function(stage) {
-              const cards = resumenPedidos
-                .map(function(r) { return {pedido: r.pedido, tareas: r.tareas[stage.id]}; })
-                .filter(function(x) { return x.tareas.length > 0; });
-              return (
-                <div key={stage.id} style={{background:stage.bg,border:"1px solid "+stage.border,borderRadius:11,padding:"12px 10px",minHeight:200}}>
-                  <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12,paddingBottom:9,borderBottom:"1px solid "+stage.border}}>
-                    <div style={{width:10,height:10,borderRadius:"50%",background:stage.color}}/>
-                    <div style={{flex:1,fontFamily:FONT,fontWeight:700,fontSize:14,color:stage.color}}>{stage.label}</div>
-                    <div style={{background:stage.color,color:"#fff",borderRadius:10,padding:"1px 8px",fontSize:10,fontWeight:700,fontFamily:FS}}>{cards.length}</div>
-                  </div>
-                  {cards.length === 0 ? (
-                    <div style={{color:T.textFade,fontSize:11,fontFamily:FS,textAlign:"center",padding:"20px 0"}}>Sin tareas</div>
-                  ) : cards.map(function(c) {
-                    const pedido = c.pedido;
-                    const done = pedido.tareas || {};
-                    const tareasCompletas = c.tareas.filter(function(t){return done[t.id];}).length;
-                    const stageDone = tareasCompletas === c.tareas.length;
-                    const dias = diasParaEntrega(pedido.fechaEntrega);
-                    const colorDia = colorDiasEntrega(dias);
-                    const textoDia = textoDiasEntrega(dias);
-                    const urg = dias!==null && dias<=1;
-                    return (
-                      <div key={pedido.id} style={{background:T.bgCard,border:urg?"2px solid "+T.red+"60":"1px solid "+T.border,borderRadius:8,padding:"10px 11px",marginBottom:8}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7,paddingBottom:6,borderBottom:"1px solid "+T.border}}>
-                          <div style={{flex:1,minWidth:0}}>
-                            <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                              <div style={{fontFamily:FONT,fontWeight:700,fontSize:13,color:stage.color}}>#{pedido.folio}</div>
-                              {stageDone && <span style={{background:T.green,color:"#fff",borderRadius:8,padding:"1px 6px",fontSize:9,fontWeight:700,fontFamily:FS}}>✓</span>}
-                              {dias!==null && <span style={{background:colorDia,color:"#fff",borderRadius:8,padding:"1px 6px",fontSize:9,fontWeight:700,fontFamily:FS}}>{textoDia}</span>}
-                            </div>
-                            <div style={{fontSize:11,color:T.textSub,fontFamily:FS,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{pedido.cliente}</div>
-                          </div>
-                          <div style={{fontSize:10,color:T.textFade,fontFamily:FS,fontWeight:600,flexShrink:0,marginLeft:6}}>{tareasCompletas}/{c.tareas.length}</div>
-                        </div>
-                        {(function(){
-                          // Agrupar tareas por productoId
-                          const grupos = {};
-                          c.tareas.forEach(function(t){
-                            const k = t.productoId || "default";
-                            if (!grupos[k]) grupos[k] = [];
-                            grupos[k].push(t);
-                          });
-                          const productosMeta = normalizarPedido(pedido).productos;
-                          const ordenIds = Object.keys(grupos);
-                          return ordenIds.map(function(pid, gi){
-                            const meta = productosMeta.find(function(m){return m.id === pid;});
-                            const titulo = meta ? meta.titulo : (ordenIds.length === 1 ? "" : "Producto "+(gi+1));
-                            const notaProd = meta ? meta.nota : "";
-                            return (
-                              <div key={pid} style={{background:gi%2===0?"transparent":"rgba(0,0,0,0.02)",borderRadius:5,padding:titulo?"5px 4px":"0",marginBottom:titulo?6:0,borderLeft:titulo?"2px solid "+stage.color+"40":"none"}}>
-                                {titulo && <div style={{fontFamily:FONT,fontSize:11,fontWeight:700,color:stage.color,marginBottom:2,paddingLeft:4}}>{titulo}</div>}
-                                {stage.id === "impresion" && meta && meta.imagen && (
-                                  <div style={{marginBottom:6,paddingLeft:4}}>
-                                    {meta.fileId ? (
-                                      <a href={'https://drive.google.com/uc?export=download&id='+meta.fileId} download={"pedido_"+pedido.folio+"_"+((meta.titulo||"img").replace(/[^a-z0-9]/gi,"_"))+".jpg"} target="_blank" rel="noreferrer" style={{display:"block"}}>
-                                        <img src={meta.imagen} alt="ref" style={{width:"100%",maxHeight:140,objectFit:"contain",background:"#fff",borderRadius:5,border:"1px solid "+stage.border,cursor:"pointer"}}/>
-                                      </a>
-                                    ) : (
-                                      <img src={meta.imagen} alt="ref" style={{width:"100%",maxHeight:140,objectFit:"contain",background:"#fff",borderRadius:5,border:"1px solid "+stage.border}}/>
-                                    )}
-                                    {meta.fileId && <div style={{fontSize:9,color:T.textFade,fontFamily:FS,marginTop:2,textAlign:"center"}}>📥 Click para descargar / abrir</div>}
-                                  </div>
-                                )}
-                                {notaProd && <div style={{fontSize:10,color:T.amber,fontFamily:FS,fontStyle:"italic",marginBottom:4,padding:"3px 6px",background:"#FFF8E0",borderRadius:4}}>📝 {notaProd}</div>}
-                                {grupos[pid].map(function(t) {
-                                  const checked = !!done[t.id];
-                                  return (
-                                    <label key={t.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"4px 2px",cursor:"pointer",borderRadius:4}}>
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={function(){ toggleTarea(pedido.id, t.id); }}
-                                        style={{width:16,height:16,marginTop:1,cursor:"pointer",accentColor:stage.color,flexShrink:0}}
-                                      />
-                                      <div style={{flex:1,minWidth:0}}>
-                                        <div style={{fontFamily:FS,fontSize:12,fontWeight:600,color:checked?T.textFade:T.text,textDecoration:checked?"line-through":"none"}}>{t.item.nombre}</div>
-                                        {t.item.descripcion && <div style={{fontSize:10,color:T.textFade,fontFamily:FS,textDecoration:checked?"line-through":"none"}}>{t.item.descripcion}</div>}
-                                      </div>
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                            );
-                          });
-                        })()}
+                {col.items.length === 0 ? (
+                  <div style={{color:T.textFade,fontSize:11,fontFamily:FS,textAlign:"center",padding:"20px 0"}}>Sin pedidos</div>
+                ) : col.items.map(function(r){
+                  const pedido = r.pedido;
+                  const dias = diasParaEntrega(pedido.fechaEntrega);
+                  const colorDia = colorDiasEntrega(dias);
+                  const textoDia = textoDiasEntrega(dias);
+                  const completo = r.total > 0 && r.completas === r.total;
+                  return (
+                    <div key={pedido.id} onClick={function(){ setModalPedidoId(pedido.id); }}
+                      style={{background:T.bgCard,border:"1px solid "+(completo?T.green+"60":T.border),borderRadius:8,padding:"10px 11px",marginBottom:8,cursor:"pointer",transition:"box-shadow 0.15s",boxShadow:"0 1px 2px rgba(0,0,0,0.04)"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,marginBottom:4}}>
+                        <div style={{fontFamily:FONT,fontWeight:700,fontSize:14,color:T.text}}>#{pedido.folio}</div>
+                        {dias!==null && <span style={{background:colorDia,color:"#fff",borderRadius:7,padding:"1px 7px",fontSize:9,fontWeight:700,fontFamily:FS,whiteSpace:"nowrap"}}>{textoDia}</span>}
                       </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
+                      <div style={{fontSize:12,color:T.textSub,fontFamily:FS,marginBottom:7,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{pedido.cliente||"Sin nombre"}</div>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        {completo ? (
+                          <span style={{background:T.greenBg,color:T.green,border:"1px solid "+T.green+"40",borderRadius:7,padding:"2px 9px",fontSize:11,fontWeight:700,fontFamily:FS}}>✓ Todo listo</span>
+                        ) : (
+                          <span style={{background:T.bgDark,color:T.textSub,borderRadius:7,padding:"2px 9px",fontSize:11,fontWeight:700,fontFamily:FS}}>{r.completas} de {r.total} tareas</span>
+                        )}
+                        <span style={{fontSize:14,color:T.textFade}}>›</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
+      )}
+
+      {resumenModal && (
+        <Modal title={"Pedido #"+resumenModal.pedido.folio+" — "+(resumenModal.pedido.cliente||"Sin nombre")} onClose={function(){ setModalPedidoId(null); }} wide={true}>
+          {(function(){
+            const pedido = resumenModal.pedido;
+            const done = pedido.tareas || {};
+            const dias = diasParaEntrega(pedido.fechaEntrega);
+            const colorDia = colorDiasEntrega(dias);
+            const textoDia = textoDiasEntrega(dias);
+            const productosMeta = pedido.productos || [];
+            return (
+              <div>
+                <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:14,paddingBottom:12,borderBottom:"1px solid "+T.border}}>
+                  {pedido.fechaEntrega && <span style={{color:T.textFade,fontSize:12,fontFamily:FS}}>Entrega: {fmtD(pedido.fechaEntrega)}</span>}
+                  {dias!==null && <span style={{background:colorDia,color:"#fff",borderRadius:7,padding:"2px 9px",fontSize:11,fontWeight:700,fontFamily:FS}}>{textoDia}</span>}
+                  <span style={{marginLeft:"auto",background:T.bgDark,color:T.textSub,borderRadius:7,padding:"2px 10px",fontSize:12,fontWeight:700,fontFamily:FS}}>{resumenModal.completas} de {resumenModal.total} tareas</span>
+                </div>
+                {resumenModal.total === 0 ? (
+                  <div style={{color:T.textFade,fontSize:13,fontFamily:FS,textAlign:"center",padding:"24px 0"}}>Este pedido no tiene tareas de producción.</div>
+                ) : stages.map(function(stage){
+                  const tareasEtapa = resumenModal.tareas[stage.id];
+                  if (tareasEtapa.length === 0) return null;
+                  // Agrupar por producto
+                  const grupos = {};
+                  tareasEtapa.forEach(function(t){
+                    const k = t.productoId || "default";
+                    if (!grupos[k]) grupos[k] = [];
+                    grupos[k].push(t);
+                  });
+                  const ordenIds = Object.keys(grupos);
+                  const hechasEtapa = tareasEtapa.filter(function(t){return done[t.id];}).length;
+                  return (
+                    <div key={stage.id} style={{background:stage.bg,border:"1px solid "+stage.border,borderRadius:10,padding:"12px 12px",marginBottom:12}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                        <div style={{width:10,height:10,borderRadius:"50%",background:stage.color}}/>
+                        <div style={{flex:1,fontFamily:FONT,fontWeight:700,fontSize:14,color:stage.color}}>{stage.label}</div>
+                        <div style={{fontSize:11,color:stage.color,fontFamily:FS,fontWeight:700}}>{hechasEtapa}/{tareasEtapa.length}</div>
+                      </div>
+                      {ordenIds.map(function(pid, gi){
+                        const meta = productosMeta.find(function(m){return m.id === pid;});
+                        const titulo = meta ? meta.titulo : (ordenIds.length === 1 ? "" : "Producto "+(gi+1));
+                        const notaProd = meta ? meta.nota : "";
+                        return (
+                          <div key={pid} style={{marginBottom:gi < ordenIds.length-1 ? 10 : 0,paddingLeft:titulo?8:0,borderLeft:titulo?"2px solid "+stage.color+"40":"none"}}>
+                            {titulo && <div style={{fontFamily:FONT,fontSize:12,fontWeight:700,color:stage.color,marginBottom:4}}>{titulo}</div>}
+                            {stage.id === "impresion" && meta && meta.imagen && (
+                              <div style={{marginBottom:8}}>
+                                {meta.fileId ? (
+                                  <a href={'https://drive.google.com/uc?export=download&id='+meta.fileId} download={"pedido_"+pedido.folio+"_"+((meta.titulo||"img").replace(/[^a-z0-9]/gi,"_"))+".jpg"} target="_blank" rel="noreferrer" style={{display:"block"}}>
+                                    <img src={meta.imagen} alt="ref" style={{width:"100%",maxHeight:200,objectFit:"contain",background:"#fff",borderRadius:6,border:"1px solid "+stage.border,cursor:"pointer"}}/>
+                                  </a>
+                                ) : (
+                                  <img src={meta.imagen} alt="ref" style={{width:"100%",maxHeight:200,objectFit:"contain",background:"#fff",borderRadius:6,border:"1px solid "+stage.border}}/>
+                                )}
+                                {meta.fileId && <div style={{fontSize:9,color:T.textFade,fontFamily:FS,marginTop:3,textAlign:"center"}}>📥 Click para descargar / abrir</div>}
+                              </div>
+                            )}
+                            {notaProd && <div style={{fontSize:11,color:T.amber,fontFamily:FS,fontStyle:"italic",marginBottom:6,padding:"4px 8px",background:"#FFF8E0",borderRadius:5}}>📝 {notaProd}</div>}
+                            {grupos[pid].map(function(t){
+                              const checked = !!done[t.id];
+                              return (
+                                <label key={t.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 8px",cursor:"pointer",borderRadius:6,background:checked?"rgba(0,0,0,0.03)":T.bgCard,border:"1px solid "+T.border,marginBottom:5}}>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={function(){ toggleTarea(pedido.id, t.id); }}
+                                    style={{width:18,height:18,marginTop:1,cursor:"pointer",accentColor:stage.color,flexShrink:0}}
+                                  />
+                                  <div style={{flex:1,minWidth:0}}>
+                                    <div style={{fontFamily:FS,fontSize:13,fontWeight:600,color:checked?T.textFade:T.text,textDecoration:checked?"line-through":"none"}}>{t.item.nombre}</div>
+                                    {t.item.descripcion && <div style={{fontSize:11,color:T.textFade,fontFamily:FS,textDecoration:checked?"line-through":"none"}}>{t.item.descripcion}</div>}
+                                  </div>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+                {resumenModal.total > 0 && resumenModal.completas === resumenModal.total && (
+                  <div style={{background:T.greenBg,border:"1px solid "+T.green+"40",borderRadius:8,padding:"10px 14px",textAlign:"center",fontFamily:FS,fontSize:13,color:T.green,fontWeight:700}}>
+                    ✓ Todas las tareas completas — el pedido pasó a Listo
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </Modal>
       )}
     </div>
   );
@@ -4943,6 +5083,7 @@ function App() {
   const [fechaAjuste, setFechaAjuste] = useState(null); // offset manual si el usuario ajusta
   const [horaAjuste, setHoraAjuste] = useState(null);
   const [cotizacionAEditar, setCotizacionAEditar] = useState(null);
+  const [pedidoAEditar, setPedidoAEditar] = useState(null);
   const saveTimer = React.useRef(null);
   const primeraVez = React.useRef(true);
   const recargandoRemoto = React.useRef(false);
@@ -5110,6 +5251,37 @@ function App() {
   }, [pedidos, cotizaciones, ventasPOS, costos, gastos, stock, insumos, molduras, temas]);
 
   function agregarPedido(p) { setPedidos(function(ps) { return ps.concat([Object.assign({},p,{id:uid(),fecha:HOY})]); }); }
+  function actualizarPedido(original, nuevo) {
+    setPedidos(function(ps) {
+      return ps.map(function(p) {
+        if (String(p.id) !== String(original.id)) return p;
+        const totalNuevo = calcularTotal(nuevo);
+        const antNuevo = parseFloat(nuevo.anticipo) || 0;
+        const antOriginal = parseFloat(original.anticipo) || 0;
+        const diferencia = antNuevo - antOriginal;
+        const merged = Object.assign({}, p, nuevo, {
+          id: p.id,
+          folio: p.folio,
+          estado: p.estado,
+          fecha: p.fecha,
+          descuento: 0 // a partir de esta edición, el descuento vive solo en descuentoPct
+        });
+        if (diferencia > 0) {
+          const saldoNuevo = Math.max(0, totalNuevo - antNuevo);
+          merged.ultimoPago = {
+            fecha: HOY_ACTUAL(),
+            monto: diferencia,
+            tipo: saldoNuevo === 0 ? "saldo" : "anticipo",
+            metodo: nuevo.metodoPago || "Efectivo",
+            hora: HORA_ACTUAL()
+          };
+          if (saldoNuevo === 0 && totalNuevo > 0) merged.fechaSaldo = HOY;
+          else if (saldoNuevo > 0) merged.fechaAnticipo = HOY;
+        }
+        return merged;
+      });
+    });
+  }
   function agregarCot(c) { setCotizaciones(function(cs) { return cs.concat([Object.assign({},c,{id:uid()})]); }); }
   function agregarVentaPOS(v) { setVentasPOS(function(vs) { return vs.concat([Object.assign({},v,{id:uid()})]); }); }
   const [cotConvertir, setCotConvertir] = useState(null);
@@ -5220,9 +5392,9 @@ function App() {
           </div>
         )}
         {tab==="dashboard" && <ErrorBoundary><TabDashboard pedidos={pedidos} cotizaciones={cotizaciones} costos={costos} gastos={gastos} stock={stock} ventasPOS={ventasPOS}/></ErrorBoundary>}
-        {tab==="cotizador" && <ErrorBoundary><TabCotizador insumos={insumos} molduras={molduras} nextFolio={nextFolio} setNextFolio={setNextFolio} nextFolioQ={nextFolioQ} setNextFolioQ={setNextFolioQ} onPedidoCreado={agregarPedido} onCotizacionCreada={agregarCot} setCotizadorDirty={setCotizadorDirty} stock={stock} cotizacionAEditar={cotizacionAEditar} onLimpiarEdicion={() => setCotizacionAEditar(null)} setCotizaciones={setCotizaciones}/></ErrorBoundary>}
+        {tab==="cotizador" && <ErrorBoundary><TabCotizador insumos={insumos} molduras={molduras} nextFolio={nextFolio} setNextFolio={setNextFolio} nextFolioQ={nextFolioQ} setNextFolioQ={setNextFolioQ} onPedidoCreado={agregarPedido} onCotizacionCreada={agregarCot} setCotizadorDirty={setCotizadorDirty} stock={stock} cotizacionAEditar={cotizacionAEditar} onLimpiarEdicion={() => setCotizacionAEditar(null)} setCotizaciones={setCotizaciones} pedidoAEditar={pedidoAEditar} onLimpiarEdicionPedido={() => setPedidoAEditar(null)} onPedidoActualizado={actualizarPedido} onVolverAPedidos={() => { setPedidoAEditar(null); setTabRaw("pedidos"); }}/></ErrorBoundary>}
         {tab==="cotizaciones" && <ErrorBoundary><TabCotizaciones cotizaciones={cotizaciones} setCotizaciones={setCotizaciones} onConvertir={convertirCot} nextFolio={nextFolio} onModificar={(c) => { setCotizacionAEditar(c); setTab("cotizador"); }}/></ErrorBoundary>}
-        {tab==="pedidos" && <ErrorBoundary><TabPedidos pedidos={pedidos} setPedidos={setPedidos} nextFolio={nextFolio} setNextFolio={setNextFolio} stock={stock} onNuevoPedido={() => setTab("cotizador")}/></ErrorBoundary>}
+        {tab==="pedidos" && <ErrorBoundary><TabPedidos pedidos={pedidos} setPedidos={setPedidos} nextFolio={nextFolio} setNextFolio={setNextFolio} stock={stock} onNuevoPedido={() => setTab("cotizador")} onEditarPedido={(p) => { setPedidoAEditar(normalizarPedido(p)); setTab("cotizador"); }}/></ErrorBoundary>}
         {tab==="flujo" && <ErrorBoundary><TabFlujo pedidos={pedidos} setPedidos={setPedidos} molduras={molduras} insumos={insumos} stock={stock}/></ErrorBoundary>}
         {tab==="cxc" && <ErrorBoundary><TabCXC pedidos={pedidos} setPedidos={setPedidos}/></ErrorBoundary>}
         {tab==="pos" && <ErrorBoundary><TabPOS stock={stock} setStock={setStock} nextFolio={nextFolio} setNextFolio={setNextFolio} onVentaCreada={agregarVentaPOS}/></ErrorBoundary>}
