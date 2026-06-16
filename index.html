@@ -2908,9 +2908,11 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
   registros.forEach(function(g) { const m = (g.fecha||"").slice(0,7); if (m && meses.indexOf(m)<0) meses.push(m); });
   meses.sort().reverse();
 
-  const lista = registros.filter(g => (filMes==="todos"||( g.fecha||"").startsWith(filMes)) && (filCat==="Todos"||g.categoria===filCat));
+  const listaMes = registros.filter(g => (filMes==="todos"||(g.fecha||"").startsWith(filMes)));
+  const lista = listaMes.filter(g => (filCat==="Todos"||g.categoria===filCat));
   const total = lista.reduce((s,g) => s+g.monto, 0);
-  const porCat = categorias.map(function(c) { return {cat:c,total:lista.filter(g => g.categoria===c).reduce((s,g) => s+g.monto,0)}; }).filter(c => c.total>0);
+  const totalMes = listaMes.reduce((s,g) => s+g.monto, 0);
+  const porCat = categorias.map(function(c) { return {cat:c,total:listaMes.filter(g => g.categoria===c).reduce((s,g) => s+g.monto,0)}; }).filter(c => c.total>0);
   const maxC = Math.max.apply(null, porCat.map(c => c.total).concat([1]));
 
   return (
@@ -2961,10 +2963,11 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
           <Card>
             <ST>Por categoria</ST>
             {porCat.length===0 ? <div style={{color:T.textFade,fontSize:12,fontFamily:FS}}>Sin datos</div> : porCat.map(function(item) {
+              const activo = filCat === item.cat;
               return (
-                <div key={item.cat} style={{marginBottom:9}}>
-                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                    <span style={{color:T.textSub,fontSize:12,fontFamily:FS}}>{item.cat}</span>
+                <div key={item.cat} onClick={function(){ setFC(activo ? "Todos" : item.cat); }} title={activo?"Clic para quitar el filtro":"Clic para filtrar por "+item.cat} style={{marginBottom:9,cursor:"pointer",borderRadius:6,padding:"4px 6px",margin:"-4px -6px 5px",background:activo?(esCosto?T.orangeBg:T.blueBg):"transparent",border:"1px solid "+(activo?(esCosto?T.orange+"50":T.blue+"50"):"transparent")}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,alignItems:"center"}}>
+                    <span style={{color:activo?(esCosto?T.orange:T.blue):T.textSub,fontSize:12,fontFamily:FS,fontWeight:activo?700:400}}>{activo?"✓ ":""}{item.cat}</span>
                     <span style={{fontSize:12,fontWeight:700,fontFamily:FS}}>{fmt(item.total)}</span>
                   </div>
                   <div style={{background:T.bgDark,borderRadius:4,height:7,overflow:"hidden"}}>
@@ -2973,9 +2976,20 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
                 </div>
               );
             })}
-            <div style={{borderTop:"1px solid "+T.border,marginTop:10,paddingTop:10,display:"flex",justifyContent:"space-between"}}>
-              <span style={{fontFamily:FONT,fontWeight:700}}>Total</span>
-              <span style={{fontFamily:FONT,fontWeight:700,fontSize:16}}>{fmt(total)}</span>
+            {filCat !== "Todos" && (
+              <button onClick={function(){ setFC("Todos"); }} style={{width:"100%",marginTop:4,marginBottom:6,background:"transparent",border:"1px solid "+T.border,borderRadius:6,padding:"5px 0",cursor:"pointer",fontFamily:FS,fontSize:11,color:T.textSub,fontWeight:600}}>✕ Quitar filtro «{filCat}»</button>
+            )}
+            <div style={{borderTop:"1px solid "+T.border,marginTop:10,paddingTop:10}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
+                <span style={{fontFamily:FONT,fontWeight:700}}>Total {filMes!=="todos"?"del mes":""}</span>
+                <span style={{fontFamily:FONT,fontWeight:700,fontSize:16}}>{fmt(totalMes)}</span>
+              </div>
+              {filCat !== "Todos" && (
+                <div style={{display:"flex",justifyContent:"space-between",marginTop:4,color:esCosto?T.orange:T.blue}}>
+                  <span style={{fontFamily:FS,fontWeight:600,fontSize:12}}>Filtrado: {filCat}</span>
+                  <span style={{fontFamily:FONT,fontWeight:700,fontSize:13}}>{fmt(total)}</span>
+                </div>
+              )}
             </div>
           </Card>
         </div>
