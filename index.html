@@ -863,6 +863,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   const [lineas, setLineas] = useState([]);
   const [molSel, setMolSel] = useState(null);
   const [molBusq, setMolBusq] = useState("");
+  const [stkBusq, setStkBusq] = useState("");
   const [productos, setProductos] = useState([]);
   const [modalNota, setModalNota] = useState(false);
   const [modalCot, setModalCot] = useState(false);
@@ -870,6 +871,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   const [telCot, setTelCot] = useState("");
   const [valCot, setValCot] = useState("");
   const [notaCot, setNotaCot] = useState("");
+  const [descCot, setDescCot] = useState("");
   const [editandoFolio, setEditandoFolio] = useState(null); // folio que estamos editando
 
   // Cargar cotización para edición
@@ -910,6 +912,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
       setTelCot(cotizacionAEditar.tel || "");
       setValCot(cotizacionAEditar.fechaEntrega || cotizacionAEditar.validez || "");
       setNotaCot(cotizacionAEditar.nota || "");
+      setDescCot(cotizacionAEditar.descuentoPct ? String(cotizacionAEditar.descuentoPct) : "");
       setEditandoFolio(cotizacionAEditar.folio);
       setLineas([]);
       setMolSel(null);
@@ -927,7 +930,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   // Build flat items with productoId tagging + productos metadata array
   const todosItems = productos.flatMap(p => p.lineas.map(l => ({nombre:l.nombre,descripcion:l.descripcion,precio:l.precio,productoId:p.id})))
                       .concat(lineas.map(l => ({nombre:l.nombre,descripcion:l.descripcion,precio:l.precio,productoId:"_curso"})));
-  const productosMeta = productos.map(p => ({id:p.id, titulo:"Cuadro "+(p.alto)+"x"+(p.ancho)+"cm", nota:p.nota||"", imagen:p.imagen||null, fileId:p.fileId||null, cantidad: parseFloat(p.cantidad)||1}))
+  const productosMeta = productos.map(p => ({id:p.id, titulo:(p.esStock ? p.titulo : "Cuadro "+(p.alto)+"x"+(p.ancho)+"cm"), nota:p.nota||"", imagen:p.imagen||null, fileId:p.fileId||null, stockId:p.stockId||null, cantidad: parseFloat(p.cantidad)||1}))
                           .concat(lineas.length ? [{id:"_curso", titulo:"Cuadro "+alto+"x"+ancho+"cm", nota:"", imagen:null, cantidad:1}] : []);
   const totalTotal = productos.reduce(function(s,p){
     const sub = p.lineas.reduce(function(ss,l){return ss+(parseFloat(l.precio)||0);},0);
@@ -966,6 +969,23 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
     setMolSel(null);
     setAlto("");
     setAncho("");
+  }
+  function agregarDeStock(s) {
+    const pid = uid();
+    const titulo = s.nombre + " " + (s.alto||"") + (s.alto&&s.ancho?"x":"") + (s.ancho||"") + (s.alto||s.ancho?"cm":"");
+    setProductos(productos.concat([{
+      id: pid,
+      esStock: true,
+      stockId: s.id,
+      titulo: titulo.trim(),
+      alto: s.alto||"",
+      ancho: s.ancho||"",
+      nota: "",
+      imagen: null,
+      fileId: null,
+      cantidad: 1,
+      lineas: [{id:uid(), nombre:s.nombre, descripcion:(s.medidas||""), precio:parseFloat(s.precio)||0, costo:0, tipo:"insumo", cat:"stock"}]
+    }]));
   }
   function duplicarProducto(pid) {
     setProductos(function(prev) {
@@ -1040,24 +1060,27 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   }
   function guardarCot() {
     if (!cliCot) return;
+    const desCotPct = parseFloat(descCot)||0;
+    const totalConDesc = Math.max(0, totalTotal - (totalTotal*desCotPct/100));
     if (editandoFolio && setCotizaciones) {
       // Modo edición: actualizar cotización existente
       setCotizaciones(function(prev){
         return prev.map(function(c){
           if (String(c.folio) === String(editandoFolio)) {
-            return Object.assign({},c,{cliente:cliCot,tel:telCot,validez:valCot,fechaEntrega:valCot,nota:notaCot,items:todosItems,productos:productosMeta,total:totalTotal});
+            return Object.assign({},c,{cliente:cliCot,tel:telCot,validez:valCot,fechaEntrega:valCot,nota:notaCot,items:todosItems,productos:productosMeta,total:totalConDesc,descuentoPct:desCotPct});
           }
           return c;
         });
       });
       setEditandoFolio(null);
     } else {
-      onCotizacionCreada({folio:nextFolioQ,cliente:cliCot,tel:telCot,validez:valCot,nota:notaCot,items:todosItems,productos:productosMeta,total:totalTotal,estado:"Pendiente",fecha:HOY});
+      onCotizacionCreada({folio:nextFolioQ,cliente:cliCot,tel:telCot,validez:valCot,nota:notaCot,items:todosItems,productos:productosMeta,total:totalConDesc,descuentoPct:desCotPct,estado:"Pendiente",fecha:HOY});
       setNextFolioQ(f => f+1);
     }
     setModalCot(false);
     setCliCot("");
     setTelCot("");
+    setDescCot("");
     setProductos([]);
     setLineas([]);
   }
@@ -1146,6 +1169,23 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
             })}
           </div>
         </div>
+        <div style={{marginBottom:18}}>
+          <ST>Desde stock</ST>
+          <div style={{color:T.textFade,fontSize:11,fontFamily:FS,marginBottom:8}}>Productos ya armados de inventario. Se agregan directo al pedido (sin medidas).</div>
+          <input value={stkBusq} onChange={e => setStkBusq(e.target.value)} placeholder="Buscar en stock..." style={{width:"100%",background:T.bgCard,border:"1px solid "+T.border,borderRadius:7,padding:"8px 12px",color:T.text,fontFamily:FS,fontSize:13,outline:"none",marginBottom:10,boxSizing:"border-box"}}/>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(170px,1fr))",gap:7,maxHeight:200,overflowY:"auto"}}>
+            {(stock||[]).filter(function(s){return s && s.nombre && (s.nombre+"").toLowerCase().indexOf(stkBusq.toLowerCase()) >= 0;}).map(function(s) {
+              return (
+                <button key={s.id} onClick={() => agregarDeStock(s)} style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:"8px 10px",textAlign:"left",cursor:"pointer",fontFamily:FS}}>
+                  <div style={{color:T.text,fontSize:11,fontWeight:600,marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.nombre}</div>
+                  <div style={{color:T.green,fontWeight:700,fontSize:14,fontFamily:FONT}}>{fmt(s.precio||0)}</div>
+                  {(s.alto||s.ancho) && <div style={{color:T.textFade,fontSize:10}}>{s.alto||""}{s.alto&&s.ancho?"x":""}{s.ancho||""}{(s.alto||s.ancho)?"cm":""}</div>}
+                </button>
+              );
+            })}
+            {(stock||[]).length === 0 && <div style={{color:T.textFade,fontSize:11,fontFamily:FS,fontStyle:"italic",gridColumn:"1/-1",padding:"8px 0"}}>No hay productos en stock todavía.</div>}
+          </div>
+        </div>
       </div>
       <div style={{position:"sticky",top:0}}>
         <Card>
@@ -1164,7 +1204,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
               <div key={p.id} style={{background:"#FFF8F0",border:"1px solid "+T.amber+"30",borderRadius:8,padding:"9px 12px",marginBottom:7}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontFamily:FONT,fontSize:12,fontWeight:700,color:T.text,marginBottom:2}}>Cuadro {pi+1} — {p.alto}x{p.ancho}cm</div>
+                    <div style={{fontFamily:FONT,fontSize:12,fontWeight:700,color:T.text,marginBottom:2}}>{p.esStock ? p.titulo : ("Cuadro "+(pi+1)+" — "+p.alto+"x"+p.ancho+"cm")}</div>
                     {desc && <div style={{fontSize:11,color:T.textSub,fontFamily:FS,lineHeight:1.4}}>{desc}</div>}
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
@@ -1224,8 +1264,8 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
                 <span style={{color:T.amber,fontWeight:700,fontSize:22,fontFamily:FONT}}>{fmt(totalTotal)}</span>
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                <Btn onClick={() => setModalNota(true)} style={{width:"100%",padding:"10px 0"}}>Crear Nota #{nextFolio}</Btn>
-                <Btn variant="amber" onClick={() => setModalCot(true)} style={{width:"100%",padding:"9px 0",fontSize:12}}>{editandoFolio ? "Actualizar C-"+editandoFolio : "Cotizacion C-"+nextFolioQ}</Btn>
+                <Btn onClick={() => setModalNota(true)} style={{width:"100%",padding:"10px 0"}}>Guardar pedido #{nextFolio}</Btn>
+                <Btn variant="amber" onClick={() => setModalCot(true)} style={{width:"100%",padding:"9px 0",fontSize:12}}>{editandoFolio ? "Actualizar cotización C-"+editandoFolio : "Guardar como cotización C-"+nextFolioQ}</Btn>
                 <Btn variant="danger" size="sm" style={{width:"100%"}} onClick={() => {setLineas([]);setMolSel(null);setProductos([]);setAlto("");setAncho("");}}>Limpiar todo</Btn>
               </div>
             </div>
@@ -1241,10 +1281,19 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
           <Inp label="Cliente *" value={cliCot} onChange={e => setCliCot(e.target.value)}/>
           <Inp label="Telefono" value={telCot} onChange={e => setTelCot(e.target.value)} type="tel"/>
           <Inp label="Valida hasta" value={valCot} onChange={e => setValCot(e.target.value)} type="date"/>
+          <Inp label="Descuento (%)" value={descCot} onChange={e => setDescCot(e.target.value)} type="number"/>
           <Inp label="Observaciones" value={notaCot} onChange={e => setNotaCot(e.target.value)}/>
-          <div style={{background:"#FFF8E0",borderRadius:8,padding:"10px 12px",marginBottom:12,display:"flex",justifyContent:"space-between"}}>
-            <span style={{fontFamily:FONT,fontWeight:700}}>Total</span>
-            <span style={{fontFamily:FONT,color:T.amber,fontWeight:700,fontSize:18}}>{fmt(totalTotal)}</span>
+          <div style={{background:"#FFF8E0",borderRadius:8,padding:"10px 12px",marginBottom:12}}>
+            {(parseFloat(descCot)||0) > 0 && (
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:5,fontFamily:FS,fontSize:12,color:T.textSub}}>
+                <span>Subtotal · Descuento {parseFloat(descCot)||0}%</span>
+                <span>{fmt(totalTotal)} · -{fmt(totalTotal*(parseFloat(descCot)||0)/100)}</span>
+              </div>
+            )}
+            <div style={{display:"flex",justifyContent:"space-between"}}>
+              <span style={{fontFamily:FONT,fontWeight:700}}>Total</span>
+              <span style={{fontFamily:FONT,color:T.amber,fontWeight:700,fontSize:18}}>{fmt(Math.max(0, totalTotal - (totalTotal*(parseFloat(descCot)||0)/100)))}</span>
+            </div>
           </div>
           <div style={{display:"flex",gap:8,marginBottom:10}}>
             <Btn variant="ghost" style={{flex:1}} onClick={() => generarPDF({folio:"C-"+nextFolioQ,tipo:"cotizacion",cliente:cliCot,clienteTel:telCot,clienteCorreo:"",fecha:HOY,fechaEntrega:valCot,items:todosItems,productos:productosMeta,stock:stock,anticipo:0,descuento:0,iva:false})}>Vista previa PDF</Btn>
@@ -1693,8 +1742,79 @@ function ModalPago({pedido, nuevoPago, setNP, nuevoPagoMet, setNPM, onClose, onA
   );
 }
 
+// ── VISTA HOY (enfoque diario) ─────────────────────────────────
+function TarjetaHoy({p, calcularTotal, calcularSaldo, diasParaEntrega, colorDiasEntrega, textoDiasEntrega, onVer, onEditar, onCambiar, acento}) {
+  const tot = calcularTotal(p);
+  const pend = calcularSaldo(p);
+  const dias = diasParaEntrega(p.fechaEntrega);
+  const colorDia = colorDiasEntrega(dias);
+  const textoDia = textoDiasEntrega(dias);
+  const grupos = gruposProducto(p).slice(0,2);
+  return (
+    <div style={{background:T.bgCard,border:"1px solid "+T.border,borderLeft:"4px solid "+acento,borderRadius:9,padding:"11px 13px",marginBottom:9}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,fontSize:14,fontFamily:FONT}}>{p.cliente}</div>
+          <div style={{color:T.textFade,fontSize:11,fontFamily:FS,marginBottom:5}}>#{p.folio}</div>
+          {grupos.map(function(g){
+            return (
+              <div key={g.id} style={{fontSize:11,fontFamily:FS,color:T.textSub,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                • {g.titulo}{g.nota ? <span style={{color:T.amber,fontStyle:"italic"}}> — {g.nota}</span> : null}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{textAlign:"right",whiteSpace:"nowrap"}}>
+          <div style={{color:T.amber,fontWeight:700,fontSize:15,fontFamily:FONT}}>{fmt(tot)}</div>
+          {Math.round(pend)>0 ? <div style={{color:T.orange,fontSize:11,fontFamily:FS}}>Saldo: {fmt(pend)}</div> : <div style={{color:T.green,fontSize:11,fontFamily:FS,fontWeight:600}}>PAGADO</div>}
+          {p.fechaEntrega && dias!==null && (
+            <div style={{display:"inline-block",background:colorDia,color:"#fff",borderRadius:5,padding:"2px 8px",fontSize:10,fontFamily:FS,fontWeight:700,marginTop:4}}>{textoDia}</div>
+          )}
+        </div>
+      </div>
+      <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:9}}>
+        {p.estado === "Pendiente" && <button onClick={() => onCambiar(p.id,"Produccion")} style={{background:"#F0F4FF",color:"#1565C0",border:"1px solid #90B0E0",borderRadius:5,padding:"4px 9px",fontSize:11,cursor:"pointer",fontFamily:FS,fontWeight:600}}>→ A taller</button>}
+        {p.estado === "Produccion" && <button onClick={() => onCambiar(p.id,"Listo")} style={{background:"#E8F5E9",color:"#2E7D32",border:"1px solid #A5D6A7",borderRadius:5,padding:"4px 9px",fontSize:11,cursor:"pointer",fontFamily:FS,fontWeight:600}}>→ Listo</button>}
+        {p.estado === "Listo" && <button onClick={() => onCambiar(p.id,"Entregado")} style={{background:T.green,color:"#fff",border:"none",borderRadius:5,padding:"4px 11px",fontSize:11,cursor:"pointer",fontFamily:FS,fontWeight:700}}>✓ Entregado</button>}
+        <button onClick={() => onVer(p)} style={{background:T.greenBg,color:T.green,border:"1px solid "+T.green+"30",borderRadius:5,padding:"4px 9px",fontSize:11,cursor:"pointer",fontFamily:FS}}>Ver</button>
+        <button onClick={() => onEditar(p)} style={{background:T.bgDark,color:T.textSub,border:"1px solid "+T.border,borderRadius:5,padding:"4px 9px",fontSize:11,cursor:"pointer",fontFamily:FS}}>Editar</button>
+      </div>
+    </div>
+  );
+}
+
+function VistaHoy({atrasados, proximos, listos, calcularTotal, calcularSaldo, diasParaEntrega, colorDiasEntrega, textoDiasEntrega, onVer, onEditar, onCambiar}) {
+  const props = {calcularTotal, calcularSaldo, diasParaEntrega, colorDiasEntrega, textoDiasEntrega, onVer, onEditar, onCambiar};
+  const secciones = [
+    {key:"atr", titulo:"Atrasados", sub:"Ya pasó la fecha de entrega", color:"#C62828", bg:"#FFEBEE", items:atrasados, acento:"#C62828", vacio:"Sin pedidos atrasados 🎉"},
+    {key:"prox", titulo:"Para hoy y mañana", sub:"Entregas próximas en producción", color:"#E65100", bg:"#FFF3E0", items:proximos, acento:"#E65100", vacio:"Nada urgente para hoy o mañana"},
+    {key:"list", titulo:"Listos para entregar", sub:"Terminados, esperando al cliente", color:"#2E7D32", bg:"#E8F5E9", items:listos, acento:"#2E7D32", vacio:"Nada terminado por entregar"}
+  ];
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14}}>
+      {secciones.map(function(s){
+        return (
+          <div key={s.key} style={{background:s.bg,border:"1px solid "+s.color+"30",borderRadius:12,padding:"13px 12px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:11}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:14,fontFamily:FONT,color:s.color}}>{s.titulo}</div>
+                <div style={{color:T.textFade,fontSize:11,fontFamily:FS}}>{s.sub}</div>
+              </div>
+              <div style={{background:s.color,color:"#fff",borderRadius:11,padding:"2px 10px",fontSize:13,fontWeight:700,fontFamily:FS}}>{s.items.length}</div>
+            </div>
+            {s.items.length === 0
+              ? <div style={{color:T.textFade,fontSize:12,fontFamily:FS,fontStyle:"italic",padding:"14px 4px",textAlign:"center"}}>{s.vacio}</div>
+              : s.items.map(function(p){ return <TarjetaHoy key={String(p.folio)+"-"+String(p.id)} p={p} acento={s.acento} {...props}/>; })
+            }
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── PEDIDOS ───────────────────────────────────────────────────
-function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock}) {
+function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuevoPedido}) {
   const [modalForm, setMF] = useState(false);
   const [modalDoc, setMD] = useState(null);
   const [modalPago, setMP] = useState(null);
@@ -1702,9 +1822,11 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock}) {
   const [nuevoPagoMet, setNPM] = useState("Efectivo");
   const [editId, setEid] = useState(null);
   const [form, setForm] = useState({});
-  const [vista, setVista] = useState("kanban");
+  const [vista, setVista] = useState("hoy");
   const [busq, setBusq] = useState("");
   const [nid, setNid] = useState(200);
+  const [stockBuscar, setStockBuscar] = useState("");
+  const [stockFocus, setStockFocus] = useState(false);
   const urgentes = pedidos.filter(p => { const d=dRest(p.fechaEntrega); return d!==null&&d<=2&&!["Entregado","Bodega"].includes(p.estado); });
 
   const busqL = busq.toLowerCase();
@@ -2018,6 +2140,22 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock}) {
     actualizarProducto(pid, "fileId", null);
   }
 
+  // ── VISTA HOY: 3 grupos de enfoque diario ──
+  const enProceso = function(p){ return p.estado === "Pendiente" || p.estado === "Produccion"; };
+  const hoyAtrasados = pedidosFil.filter(function(p){
+    const d = diasParaEntrega(p.fechaEntrega);
+    return enProceso(p) && d !== null && d < 0;
+  }).sort(function(a,b){ return (diasParaEntrega(a.fechaEntrega)||0) - (diasParaEntrega(b.fechaEntrega)||0); });
+  const hoyProximos = pedidosFil.filter(function(p){
+    const d = diasParaEntrega(p.fechaEntrega);
+    return enProceso(p) && d !== null && d >= 0 && d <= 1;
+  }).sort(function(a,b){ return (diasParaEntrega(a.fechaEntrega)||0) - (diasParaEntrega(b.fechaEntrega)||0); });
+  const hoyListos = pedidosFil.filter(function(p){ return p.estado === "Listo"; }).sort(function(a,b){
+    const fa = parseInt(String(a.folio).replace(/\D/g,""))||0;
+    const fb = parseInt(String(b.folio).replace(/\D/g,""))||0;
+    return fb - fa;
+  });
+
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
@@ -2027,10 +2165,11 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock}) {
         </div>
         <div style={{display:"flex",gap:8}}>
           <div style={{display:"flex",border:"1px solid "+T.border,borderRadius:7,overflow:"hidden"}}>
+            <button onClick={() => setVista("hoy")} style={{background:vista==="hoy"?T.bgDark:"transparent",color:vista==="hoy"?T.text:T.textFade,border:"none",padding:"6px 14px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:vista==="hoy"?700:400}}>Hoy</button>
             <button onClick={() => setVista("kanban")} style={{background:vista==="kanban"?T.bgDark:"transparent",color:vista==="kanban"?T.text:T.textFade,border:"none",padding:"6px 14px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:vista==="kanban"?700:400}}>Kanban</button>
             <button onClick={() => setVista("lista")} style={{background:vista==="lista"?T.bgDark:"transparent",color:vista==="lista"?T.text:T.textFade,border:"none",padding:"6px 14px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:vista==="lista"?700:400}}>Lista</button>
           </div>
-          <Btn onClick={() => openForm(null)}>+ Nuevo pedido</Btn>
+          <Btn onClick={() => { if (onNuevoPedido) onNuevoPedido(); else openForm(null); }}>+ Nuevo pedido</Btn>
         </div>
       </div>
       <div style={{marginBottom:14}}>
@@ -2043,7 +2182,21 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock}) {
         {busq && <div style={{color:T.textSub,fontSize:11,fontFamily:FS,marginTop:4}}>{pedidosFil.length} resultado{pedidosFil.length!==1?"s":""} para "{busq}"</div>}
       </div>
 
-      {vista === "kanban" ? (
+      {vista === "hoy" ? (
+        <VistaHoy
+          atrasados={hoyAtrasados}
+          proximos={hoyProximos}
+          listos={hoyListos}
+          calcularTotal={calcularTotal}
+          calcularSaldo={calcularSaldo}
+          diasParaEntrega={diasParaEntrega}
+          colorDiasEntrega={colorDiasEntrega}
+          textoDiasEntrega={textoDiasEntrega}
+          onVer={(p) => setMD(normalizarPedido(p))}
+          onEditar={openForm}
+          onCambiar={cambiar}
+        />
+      ) : vista === "kanban" ? (
         <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,overflowX:"auto"}}>
           {ESTADOS_K.map(function(est) {
             const col = META_K[est];
@@ -2207,33 +2360,63 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock}) {
             <div>
               <div style={{color:T.textSub,fontSize:11,fontFamily:FS,fontWeight:600,marginBottom:6}}>Productos del pedido</div>
 
-              {/* Selector para agregar desde stock */}
-              <div style={{display:"flex",gap:6,marginBottom:10}}>
-                <select id="stockPicker" style={{flex:1,background:T.bgCard,border:"1px solid "+T.border,borderRadius:7,padding:"7px 10px",color:T.text,fontFamily:FS,fontSize:12,outline:"none"}}>
-                  <option value="">— Agregar desde Stock —</option>
-                  {(stock||[]).flatMap(function(p){
-                    const temas = (p.temas||[]);
-                    if (temas.length === 0) {
-                      return [<option key={p.id} value={p.id+"|"} disabled>{p.nombre} (sin temas)</option>];
-                    }
-                    return temas.map(function(t) {
-                      const stk = parseInt(t.stock)||0;
-                      return <option key={p.id+"|"+t.id} value={p.id+"|"+t.id}>{p.nombre} — {t.nombre} ({stk} pzas) · {p.alto||"?"}x{p.ancho||"?"}cm</option>;
+              {/* Buscador con filtro en vivo para agregar desde stock */}
+              <div style={{position:"relative",marginBottom:10}}>
+                <input
+                  value={stockBuscar}
+                  onChange={e=>setStockBuscar(e.target.value)}
+                  onFocus={()=>setStockFocus(true)}
+                  onBlur={()=>setTimeout(function(){setStockFocus(false);},150)}
+                  placeholder="🔍 Buscar en stock para agregar..."
+                  style={{width:"100%",background:T.bgCard,border:"1px solid "+T.border,borderRadius:7,padding:"8px 12px",color:T.text,fontFamily:FS,fontSize:12,outline:"none",boxSizing:"border-box"}}
+                />
+                {stockFocus && (function(){
+                  const term = stockBuscar.trim().toLowerCase();
+                  const opciones = [];
+                  (stock||[]).forEach(function(p){
+                    const temas = p.temas||[];
+                    if (temas.length === 0) return;
+                    temas.forEach(function(t){
+                      const texto = (p.nombre+" "+t.nombre).toLowerCase();
+                      if (term === "" || texto.indexOf(term) !== -1) {
+                        opciones.push({producto:p, tema:t});
+                      }
                     });
-                  })}
-                </select>
-                <Btn size="sm" onClick={function(){
-                  const sel = document.getElementById("stockPicker");
-                  if (!sel || !sel.value) return;
-                  const partes = sel.value.split("|");
-                  const stockId = partes[0];
-                  const temaId = partes[1];
-                  const ref = (stock||[]).find(function(p){return p.id===stockId;});
-                  if (!ref) return;
-                  const tema = (ref.temas||[]).find(function(t){return t.id===temaId;});
-                  agregarProductoStock(ref, tema ? tema.nombre : "General");
-                  sel.value="";
-                }}>+ Agregar</Btn>
+                  });
+                  const mostrar = opciones.slice(0,8);
+                  if (mostrar.length === 0) {
+                    return (
+                      <div style={{position:"absolute",top:"100%",left:0,right:0,background:T.bgCard,border:"1px solid "+T.border,borderRadius:7,marginTop:3,padding:"10px 12px",fontSize:12,color:T.textFade,fontFamily:FS,zIndex:20}}>
+                        Sin resultados
+                      </div>
+                    );
+                  }
+                  return (
+                    <div style={{position:"absolute",top:"100%",left:0,right:0,background:T.bgCard,border:"1px solid "+T.border,borderRadius:7,marginTop:3,maxHeight:260,overflowY:"auto",zIndex:20,boxShadow:"0 4px 14px rgba(0,0,0,0.15)"}}>
+                      {mostrar.map(function(o){
+                        const stk = parseInt(o.tema.stock)||0;
+                        return (
+                          <div key={o.producto.id+"|"+o.tema.id}
+                            onClick={function(){
+                              agregarProductoStock(o.producto, o.tema.nombre);
+                              setStockBuscar("");
+                              setStockFocus(false);
+                            }}
+                            style={{padding:"8px 12px",cursor:"pointer",fontSize:12,fontFamily:FS,borderBottom:"1px solid "+T.border,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}
+                          >
+                            <span>{o.producto.nombre} — {o.tema.nombre} <span style={{color:T.textFade}}>· {o.producto.alto||"?"}x{o.producto.ancho||"?"}cm</span></span>
+                            <span style={{color:stk>0?T.green:T.red,fontWeight:700,whiteSpace:"nowrap"}}>{stk} pzas</span>
+                          </div>
+                        );
+                      })}
+                      {opciones.length > 8 && (
+                        <div style={{padding:"6px 12px",fontSize:11,color:T.textFade,fontFamily:FS,fontStyle:"italic"}}>
+                          Sigue escribiendo para acotar ({opciones.length} resultados)…
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Productos del pedido agrupados */}
@@ -4589,7 +4772,7 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
 // ── APP PRINCIPAL ─────────────────────────────────────────────
 const TABS = [
   {id:"dashboard",label:"Dashboard",icon:"📊",color:"#1565C0",desc:"KPIs y resumen general"},
-  {id:"cotizador",label:"Cotizador",icon:"🧮",color:"#6A1B9A",desc:"Calculadora de cuadros y bastidores"},
+  {id:"cotizador",label:"Nuevo Pedido",icon:"🧾",color:"#6A1B9A",desc:"Crear pedido o cotización: calculadora + stock"},
   {id:"cotizaciones",label:"Cotizaciones",icon:"📋",color:"#0277BD",desc:"Cotizaciones pendientes y aceptadas"},
   {id:"pedidos",label:"Pedidos",icon:"📦",color:"#E65100",desc:"Captura y gestión de notas de venta"},
   {id:"flujo",label:"Flujo Trabajo",icon:"🛠️",color:"#558B2F",desc:"Carpintería, impresión y detallado"},
@@ -4679,7 +4862,7 @@ function App() {
   function setTab(newTab) {
     if (tab === newTab) return;
     if (cotizadorDirty && tab === "cotizador") {
-      if (!confirmar("Tienes información sin guardar en el Cotizador. ¿Salir y descartar los datos?")) return;
+      if (!confirmar("Tienes información sin guardar en Nuevo Pedido. ¿Salir y descartar los datos?")) return;
       setCotizadorDirty(false);
     }
     setTabRaw(newTab);
@@ -5039,7 +5222,7 @@ function App() {
         {tab==="dashboard" && <ErrorBoundary><TabDashboard pedidos={pedidos} cotizaciones={cotizaciones} costos={costos} gastos={gastos} stock={stock} ventasPOS={ventasPOS}/></ErrorBoundary>}
         {tab==="cotizador" && <ErrorBoundary><TabCotizador insumos={insumos} molduras={molduras} nextFolio={nextFolio} setNextFolio={setNextFolio} nextFolioQ={nextFolioQ} setNextFolioQ={setNextFolioQ} onPedidoCreado={agregarPedido} onCotizacionCreada={agregarCot} setCotizadorDirty={setCotizadorDirty} stock={stock} cotizacionAEditar={cotizacionAEditar} onLimpiarEdicion={() => setCotizacionAEditar(null)} setCotizaciones={setCotizaciones}/></ErrorBoundary>}
         {tab==="cotizaciones" && <ErrorBoundary><TabCotizaciones cotizaciones={cotizaciones} setCotizaciones={setCotizaciones} onConvertir={convertirCot} nextFolio={nextFolio} onModificar={(c) => { setCotizacionAEditar(c); setTab("cotizador"); }}/></ErrorBoundary>}
-        {tab==="pedidos" && <ErrorBoundary><TabPedidos pedidos={pedidos} setPedidos={setPedidos} nextFolio={nextFolio} setNextFolio={setNextFolio} stock={stock}/></ErrorBoundary>}
+        {tab==="pedidos" && <ErrorBoundary><TabPedidos pedidos={pedidos} setPedidos={setPedidos} nextFolio={nextFolio} setNextFolio={setNextFolio} stock={stock} onNuevoPedido={() => setTab("cotizador")}/></ErrorBoundary>}
         {tab==="flujo" && <ErrorBoundary><TabFlujo pedidos={pedidos} setPedidos={setPedidos} molduras={molduras} insumos={insumos} stock={stock}/></ErrorBoundary>}
         {tab==="cxc" && <ErrorBoundary><TabCXC pedidos={pedidos} setPedidos={setPedidos}/></ErrorBoundary>}
         {tab==="pos" && <ErrorBoundary><TabPOS stock={stock} setStock={setStock} nextFolio={nextFolio} setNextFolio={setNextFolio} onVentaCreada={agregarVentaPOS}/></ErrorBoundary>}
