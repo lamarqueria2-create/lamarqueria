@@ -2794,6 +2794,7 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
   const [nid, setNid] = useState(100);
   const [filMes, setFM] = useState("todos");
   const [filCat, setFC] = useState("Todos");
+  const [ordenAsc, setOrdenAsc] = useState(false); // false = recientes primero
   const esCosto = tipo === "costo";
 
   function openReg(g) {
@@ -2803,26 +2804,47 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
   }
   function save() {
     if (!form.concepto || !form.monto) return;
-    const idFinal = (editId !== null && editId !== undefined && editId !== "") ? editId : nid;
+    const maxId = registros.reduce(function(m,r){ return Math.max(m, parseFloat(r.id)||0); }, 0);
+    const idFinal = (editId !== null && editId !== undefined && editId !== "") ? editId : Math.max(nid, maxId + 1);
     const item = Object.assign({},form,{id:idFinal,monto:parseFloat(form.monto)||0});
     const existe = registros.some(r => r.id===idFinal);
     if (editId && existe) {
       setRegistros(registros.map(r => r.id===editId?item:r));
     } else {
       setRegistros(registros.concat([item]));
-      setNid(n => n+1);
+      setNid(Math.max(nid, maxId + 1) + 1);
     }
     setModal(false);
   }
 
   const meses = [];
-  registros.forEach(function(g) { const m = (g.fecha||"").slice(0,7); if (m && meses.indexOf(m)<0) meses.push(m); });
+  registros.forEach(function(g) { const m = ((g.fecha||"")+"").trim().slice(0,7); if (m && meses.indexOf(m)<0) meses.push(m); });
   meses.sort().reverse();
 
-  const lista = registros.filter(g => (filMes==="todos"||( g.fecha||"").startsWith(filMes)) && (filCat==="Todos"||g.categoria===filCat));
-  const total = lista.reduce((s,g) => s+g.monto, 0);
-  const porCat = categorias.map(function(c) { return {cat:c,total:lista.filter(g => g.categoria===c).reduce((s,g) => s+g.monto,0)}; }).filter(c => c.total>0);
+  const norm = function(s){ return ((s||"")+"").trim().toLowerCase(); };
+  const lista = registros.filter(function(g){
+    const fechaOk = filMes==="todos" || ((g.fecha||"")+"").trim().startsWith(filMes);
+    const catOk = filCat==="Todos" || norm(g.categoria)===norm(filCat);
+    return fechaOk && catOk;
+  });
+  const total = lista.reduce((s,g) => s+(parseFloat(g.monto)||0), 0);
+  const porCat = categorias.map(function(c) { return {cat:c,total:lista.filter(g => norm(g.categoria)===norm(c)).reduce((s,g) => s+(parseFloat(g.monto)||0),0)}; }).filter(c => c.total>0);
   const maxC = Math.max.apply(null, porCat.map(c => c.total).concat([1]));
+
+  // Ordenamiento robusto: fechas inválidas/vacías al final, desempate por id
+  const listaOrdenada = lista.slice().sort(function(a,b){
+    const fa = ((a.fecha||"")+"").trim();
+    const fb = ((b.fecha||"")+"").trim();
+    const va = /^\d{4}-\d{2}-\d{2}/.test(fa) ? fa : null;
+    const vb = /^\d{4}-\d{2}-\d{2}/.test(fb) ? fb : null;
+    if (va === null && vb === null) return 0;
+    if (va === null) return 1;  // sin fecha → al final
+    if (vb === null) return -1;
+    if (va !== vb) return ordenAsc ? (va < vb ? -1 : 1) : (va < vb ? 1 : -1);
+    // misma fecha: desempate por id descendente (más nuevo primero) o ascendente
+    const ia = parseFloat(a.id)||0; const ib = parseFloat(b.id)||0;
+    return ordenAsc ? ia - ib : ib - ia;
+  });
 
   return (
     <div>
@@ -2838,18 +2860,30 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
           <option value="todos">Todos los meses</option>
           {meses.map(function(m) { const p=m.split("-"); return <option key={m} value={m}>{MESES[parseInt(p[1])-1]} {p[0]}</option>; })}
         </select>
+        <button onClick={() => setOrdenAsc(!ordenAsc)} title="Cambiar orden" style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:7,padding:"7px 12px",color:T.textSub,fontFamily:FS,fontSize:12,cursor:"pointer",fontWeight:600}}>
+          {ordenAsc ? "↑ Antiguos primero" : "↓ Recientes primero"}
+        </button>
         <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-          {["Todos"].concat(categorias).map(function(c) {
-            return <button key={c} onClick={() => setFC(c)} style={{background:filCat===c?T.header:"transparent",color:filCat===c?"#fff":T.textSub,border:"1px solid "+(filCat===c?T.header:T.border),borderRadius:14,padding:"4px 10px",fontSize:11,cursor:"pointer",fontFamily:FS,fontWeight:filCat===c?700:400}}>{c}</button>;
+          {(function(){
+            // Unir catálogo + categorías presentes en los datos (por si hay viejas)
+            const extra = [];
+            registros.forEach(function(g){
+              const c = ((g.categoria||"")+"").trim();
+              if (c && categorias.map(function(x){return norm(x);}).indexOf(norm(c)) < 0 && extra.map(function(x){return norm(x);}).indexOf(norm(c)) < 0) extra.push(c);
+            });
+            return ["Todos"].concat(categorias).concat(extra);
+          })().map(function(c) {
+            const activo = norm(filCat)===norm(c) || (c==="Todos" && filCat==="Todos");
+            return <button key={c} onClick={() => setFC(c)} style={{background:activo?T.header:"transparent",color:activo?"#fff":T.textSub,border:"1px solid "+(activo?T.header:T.border),borderRadius:14,padding:"4px 10px",fontSize:11,cursor:"pointer",fontFamily:FS,fontWeight:activo?700:400}}>{c}</button>;
           })}
         </div>
         <div style={{marginLeft:"auto",fontFamily:FONT,fontWeight:700,fontSize:16}}>Total: {fmt(total)}</div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 230px",gap:16,alignItems:"start"}}>
         <div>
-          {lista.length===0 ? (
+          {listaOrdenada.length===0 ? (
             <div style={{color:T.textFade,textAlign:"center",padding:"40px",fontFamily:FS}}>Sin registros para este filtro.</div>
-          ) : lista.slice().sort((a,b) => new Date(b.fecha)-new Date(a.fecha)).map(function(g) {
+          ) : listaOrdenada.map(function(g) {
             return (
               <Card key={g.id} style={{display:"flex",alignItems:"center",gap:12,marginBottom:7,padding:"10px 14px",borderLeft:"3px solid "+(esCosto?"#E65100":"#1565C0")}}>
                 <div style={{flex:1}}>
@@ -4700,6 +4734,7 @@ function todasTareasCompletas(pedido, molduras, insumos, stock) {
 }
 
 function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
+  const [modalTareasId, setModalTareasId] = useState(null); // id del pedido con modal abierto
   const enProduccion = pedidos.filter(function(p){ return p.estado === "Produccion"; });
   const stages = [
     {id:"carpinteria", label:"Carpintería", color:"#8B6914", bg:"#FFF8E0", border:"#E0C080"},
@@ -4815,24 +4850,16 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
               const dias = diasParaEntrega(pedido.fechaEntrega);
               const colorDia = colorDiasEntrega(dias);
               const textoDia = textoDiasEntrega(dias);
-              // Aplanar tareas con su etapa, luego agrupar por producto
               const tareasStage = [];
               ["carpinteria","impresion","detallado"].forEach(function(sid){
                 (r.tareas[sid]||[]).forEach(function(t){ tareasStage.push({t:t, sid:sid}); });
               });
-              const grupos = {};
-              tareasStage.forEach(function(x){
-                const k = x.t.productoId || "default";
-                if (!grupos[k]) grupos[k] = [];
-                grupos[k].push(x);
-              });
-              const productosMeta = pedido.productos || [];
-              const ordenIds = Object.keys(grupos);
               const totalT = tareasStage.length;
               const hechasT = tareasStage.filter(function(x){return done[x.t.id];}).length;
+              const pct = totalT > 0 ? (hechasT/totalT)*100 : 0;
               return (
-                <div key={pedido.id} style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:"10px 11px",marginBottom:8}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7,paddingBottom:6,borderBottom:"1px solid "+T.border}}>
+                <div key={pedido.id} onClick={function(){ setModalTareasId(pedido.id); }} style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:"9px 11px",marginBottom:8,cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                         <div style={{fontFamily:FONT,fontWeight:700,fontSize:13}}>#{pedido.folio}</div>
@@ -4842,40 +4869,9 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
                     </div>
                     <div style={{fontSize:10,color:T.textFade,fontFamily:FS,fontWeight:600,flexShrink:0,marginLeft:6}}>{hechasT}/{totalT}</div>
                   </div>
-                  {ordenIds.map(function(pid, gi){
-                    const meta = productosMeta.find(function(m){return m.id === pid;});
-                    const titulo = meta ? meta.titulo : (ordenIds.length === 1 ? "" : "Producto "+(gi+1));
-                    const notaProd = meta ? meta.nota : "";
-                    return (
-                      <div key={pid} style={{background:gi%2===0?"transparent":"rgba(0,0,0,0.02)",borderRadius:5,padding:titulo?"5px 4px":"0",marginBottom:titulo?6:0,borderLeft:titulo?"2px solid "+T.border:"none"}}>
-                        {titulo && <div style={{fontFamily:FONT,fontSize:11,fontWeight:700,color:T.textSub,marginBottom:2,paddingLeft:4}}>{titulo}</div>}
-                        {notaProd && <div style={{fontSize:10,color:T.amber,fontFamily:FS,fontStyle:"italic",marginBottom:4,padding:"3px 6px",background:"#FFF8E0",borderRadius:4}}>📝 {notaProd}</div>}
-                        {grupos[pid].map(function(x) {
-                          const t = x.t;
-                          const si = stageInfo[x.sid];
-                          const checked = !!done[t.id];
-                          return (
-                            <label key={t.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"4px 2px",cursor:"pointer",borderRadius:4}}>
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={function(){ toggleTarea(pedido.id, t.id); }}
-                                style={{width:16,height:16,marginTop:1,cursor:"pointer",accentColor:si.color,flexShrink:0}}
-                              />
-                              <div style={{flex:1,minWidth:0}}>
-                                <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
-                                  <span style={{width:7,height:7,borderRadius:"50%",background:si.color,flexShrink:0,display:"inline-block"}}/>
-                                  <span style={{fontFamily:FS,fontSize:12,fontWeight:600,color:checked?T.textFade:T.text,textDecoration:checked?"line-through":"none"}}>{t.item.nombre}</span>
-                                  <span style={{fontSize:9,color:si.color,fontFamily:FS,fontWeight:600}}>{si.label}</span>
-                                </div>
-                                {t.item.descripcion && <div style={{fontSize:10,color:T.textFade,fontFamily:FS,textDecoration:checked?"line-through":"none",paddingLeft:12}}>{t.item.descripcion}</div>}
-                              </div>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
+                  <div style={{background:T.bgDark,borderRadius:4,height:5,overflow:"hidden",marginTop:7}}>
+                    <div style={{width:pct+"%",height:"100%",background:pct===100?T.green:T.amber,borderRadius:4,transition:"width 0.3s"}}/>
+                  </div>
                 </div>
               );
             }
@@ -4945,6 +4941,71 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
                     })
                   }
                 </div>
+                {modalTareasId && (function(){
+                  const rSel = ordenados.find(function(x){return x.pedido.id === modalTareasId;});
+                  if (!rSel) return null;
+                  const pedido = rSel.pedido;
+                  const done = pedido.tareas || {};
+                  const dias = diasParaEntrega(pedido.fechaEntrega);
+                  const colorDia = colorDiasEntrega(dias);
+                  const textoDia = textoDiasEntrega(dias);
+                  const tareasStage = [];
+                  ["carpinteria","impresion","detallado"].forEach(function(sid){
+                    (rSel.tareas[sid]||[]).forEach(function(t){ tareasStage.push({t:t, sid:sid}); });
+                  });
+                  const grupos = {};
+                  tareasStage.forEach(function(x){
+                    const k = x.t.productoId || "default";
+                    if (!grupos[k]) grupos[k] = [];
+                    grupos[k].push(x);
+                  });
+                  const productosMeta = pedido.productos || [];
+                  const ordenIds = Object.keys(grupos);
+                  const hechasT = tareasStage.filter(function(x){return done[x.t.id];}).length;
+                  return (
+                    <Modal title={"Tareas — #"+pedido.folio} onClose={function(){ setModalTareasId(null); }}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10}}>
+                        <span style={{fontFamily:FS,fontSize:13,color:T.textSub,fontWeight:600}}>{pedido.cliente}</span>
+                        {dias!==null && <span style={{background:colorDia,color:"#fff",borderRadius:8,padding:"1px 8px",fontSize:10,fontWeight:700,fontFamily:FS}}>{textoDia}</span>}
+                        <span style={{marginLeft:"auto",fontSize:11,color:T.textFade,fontFamily:FS,fontWeight:600}}>{hechasT}/{tareasStage.length} completadas</span>
+                      </div>
+                      {ordenIds.map(function(pid, gi){
+                        const meta = productosMeta.find(function(m){return m.id === pid;});
+                        const titulo = meta ? meta.titulo : (ordenIds.length === 1 ? "" : "Producto "+(gi+1));
+                        const notaProd = meta ? meta.nota : "";
+                        return (
+                          <div key={pid} style={{background:gi%2===0?"transparent":"rgba(0,0,0,0.02)",borderRadius:5,padding:titulo?"5px 4px":"0",marginBottom:titulo?8:0,borderLeft:titulo?"2px solid "+T.border:"none"}}>
+                            {titulo && <div style={{fontFamily:FONT,fontSize:12,fontWeight:700,color:T.textSub,marginBottom:3,paddingLeft:4}}>{titulo}</div>}
+                            {notaProd && <div style={{fontSize:11,color:T.amber,fontFamily:FS,fontStyle:"italic",marginBottom:4,padding:"3px 6px",background:"#FFF8E0",borderRadius:4}}>📝 {notaProd}</div>}
+                            {grupos[pid].map(function(x) {
+                              const t = x.t;
+                              const si = stageInfo[x.sid];
+                              const checked = !!done[t.id];
+                              return (
+                                <label key={t.id} style={{display:"flex",alignItems:"flex-start",gap:9,padding:"5px 2px",cursor:"pointer",borderRadius:4}}>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={function(){ toggleTarea(pedido.id, t.id); }}
+                                    style={{width:17,height:17,marginTop:1,cursor:"pointer",accentColor:si.color,flexShrink:0}}
+                                  />
+                                  <div style={{flex:1,minWidth:0}}>
+                                    <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+                                      <span style={{width:7,height:7,borderRadius:"50%",background:si.color,flexShrink:0,display:"inline-block"}}/>
+                                      <span style={{fontFamily:FS,fontSize:13,fontWeight:600,color:checked?T.textFade:T.text,textDecoration:checked?"line-through":"none"}}>{t.item.nombre}</span>
+                                      <span style={{fontSize:9,color:si.color,fontFamily:FS,fontWeight:600}}>{si.label}</span>
+                                    </div>
+                                    {t.item.descripcion && <div style={{fontSize:10,color:T.textFade,fontFamily:FS,textDecoration:checked?"line-through":"none",paddingLeft:12}}>{t.item.descripcion}</div>}
+                                  </div>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                    </Modal>
+                  );
+                })()}
               </div>
             );
           })()}
