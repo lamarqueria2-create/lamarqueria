@@ -856,7 +856,7 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
 }
 
 // ── COTIZADOR ─────────────────────────────────────────────────
-function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, setNextFolioQ, onPedidoCreado, onCotizacionCreada, setCotizadorDirty, stock, cotizacionAEditar, onLimpiarEdicion, setCotizaciones}) {
+function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, setNextFolioQ, onPedidoCreado, onCotizacionCreada, setCotizadorDirty, stock, cotizacionAEditar, onLimpiarEdicion, setCotizaciones, pedidoAEditar, onLimpiarEdicionPedido, setPedidos}) {
   const [alto, setAlto] = useState("");
   const [ancho, setAncho] = useState("");
   const [cat, setCat] = useState("impresion");
@@ -875,6 +875,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   const [notaCot, setNotaCot] = useState("");
   const [descCot, setDescCot] = useState("");
   const [editandoFolio, setEditandoFolio] = useState(null); // folio que estamos editando
+  const [editandoPedido, setEditandoPedido] = useState(null); // pedido original que estamos editando
 
   // Cargar cotización para edición
   React.useEffect(function() {
@@ -923,6 +924,61 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
       if (onLimpiarEdicion) onLimpiarEdicion();
     }
   }, [cotizacionAEditar]);
+
+  // Cargar pedido para edición (regresa al constructor)
+  React.useEffect(function() {
+    if (pedidoAEditar) {
+      const items = parsearJSON(pedidoAEditar.items);
+      const prods = parsearJSON(pedidoAEditar.productos);
+      let prodList = prods;
+      if (!prodList.length) {
+        // Sin productos meta: reconstruir uno por cada productoId único
+        const idsVistos = [];
+        prodList = [];
+        items.forEach(function(it){
+          const pid = it.productoId || "_solo";
+          if (idsVistos.indexOf(pid) < 0) { idsVistos.push(pid); prodList.push({id:pid, titulo:it.nombre||"Producto"}); }
+        });
+      }
+      const productosReconstruidos = prodList.map(function(prod){
+        const itemsProd = items.filter(function(it){return (it.productoId||"_solo") === prod.id;});
+        // ¿Es un cuadro de calculadora ("Cuadro 50x60cm") o stock/manual (conserva su titulo)?
+        const match = String(prod.titulo||"").match(/^Cuadro\s+(\d+)x(\d+)cm$/i);
+        const esCalc = !!match;
+        return {
+          id: prod.id,
+          esStock: !esCalc,
+          titulo: prod.titulo || "",
+          stockId: prod.stockId || null,
+          alto: esCalc ? match[1] : "",
+          ancho: esCalc ? match[2] : "",
+          nota: prod.nota || "",
+          imagen: prod.imagen || null,
+          fileId: prod.fileId || null,
+          cantidad: parseFloat(prod.cantidad) || 1,
+          lineas: itemsProd.map(function(it){
+            return {
+              id: uid(),
+              nombre: it.nombre,
+              descripcion: it.descripcion || "",
+              precio: parseFloat(it.precio) || 0,
+              costo: 0,
+              tipo: it.tipo || "insumo",
+              cat: it.cat || (esCalc ? "impresion" : "stock"),
+              refId: it.refId
+            };
+          })
+        };
+      });
+      setProductos(productosReconstruidos);
+      setEditandoPedido(pedidoAEditar);
+      setLineas([]);
+      setMolSel(null);
+      setAlto("");
+      setAncho("");
+      if (onLimpiarEdicionPedido) onLimpiarEdicionPedido();
+    }
+  }, [pedidoAEditar]);
 
   const ok = alto && ancho && parseFloat(alto) > 0 && parseFloat(ancho) > 0;
   const m2 = ok ? parseFloat(alto) * parseFloat(ancho) / 10000 : 0;
@@ -1317,9 +1373,9 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
                 <span style={{color:T.amber,fontWeight:700,fontSize:22,fontFamily:FONT}}>{fmt(totalTotal)}</span>
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                <Btn onClick={() => setModalNota(true)} style={{width:"100%",padding:"10px 0"}}>Guardar pedido #{nextFolio}</Btn>
-                <Btn variant="amber" onClick={() => setModalCot(true)} style={{width:"100%",padding:"9px 0",fontSize:12}}>{editandoFolio ? "Actualizar cotización C-"+editandoFolio : "Guardar como cotización C-"+nextFolioQ}</Btn>
-                <Btn variant="danger" size="sm" style={{width:"100%"}} onClick={() => {setLineas([]);setMolSel(null);setProductos([]);setAlto("");setAncho("");}}>Limpiar todo</Btn>
+                <Btn onClick={() => setModalNota(true)} style={{width:"100%",padding:"10px 0"}}>{editandoPedido ? "Actualizar pedido #"+editandoPedido.folio : "Guardar pedido #"+nextFolio}</Btn>
+                {!editandoPedido && <Btn variant="amber" onClick={() => setModalCot(true)} style={{width:"100%",padding:"9px 0",fontSize:12}}>{editandoFolio ? "Actualizar cotización C-"+editandoFolio : "Guardar como cotización C-"+nextFolioQ}</Btn>}
+                <Btn variant="danger" size="sm" style={{width:"100%"}} onClick={() => {setLineas([]);setMolSel(null);setProductos([]);setAlto("");setAncho("");setEditandoPedido(null);}}>{editandoPedido ? "Cancelar edición" : "Limpiar todo"}</Btn>
               </div>
             </div>
           )}
@@ -1328,7 +1384,30 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
           )}
         </Card>
       </div>
-      {modalNota && <ModalNota items={todosItems} productos={productosMeta} stock={stock} onClose={() => setModalNota(false)} onGuardar={p => {onPedidoCreado(p);setNextFolio(f => f+1);setLineas([]);setMolSel(null);setProductos([]);setAlto("");setAncho("");}} nextFolio={nextFolio}/>}
+      {modalNota && <ModalNota items={todosItems} productos={productosMeta} stock={stock} pedidoBase={editandoPedido} onClose={() => setModalNota(false)} onGuardar={p => {
+        if (editandoPedido && setPedidos) {
+          const orig = editandoPedido;
+          setPedidos(function(prev){
+            return prev.map(function(x){
+              if (x.id !== orig.id) return x;
+              // Tomar los datos nuevos del modal, preservar identidad y estado del pedido
+              return Object.assign({}, x, p, {
+                id: x.id,
+                folio: x.folio,
+                estado: x.estado,
+                fecha: x.fecha,
+                pagos: x.pagos,
+                tareas: x.tareas
+              });
+            });
+          });
+          setEditandoPedido(null);
+        } else {
+          onPedidoCreado(p);
+          setNextFolio(f => f+1);
+        }
+        setLineas([]);setMolSel(null);setProductos([]);setAlto("");setAncho("");
+      }} nextFolio={editandoPedido ? editandoPedido.folio : nextFolio}/>}
       {modalCot && (
         <Modal title={"Cotizacion C-"+nextFolioQ} onClose={() => setModalCot(false)}>
           <Inp label="Cliente *" value={cliCot} onChange={e => setCliCot(e.target.value)}/>
@@ -1362,14 +1441,15 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   );
 }
 
-function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, generarPDF}) {
-  const [cliente, setCli] = useState("");
-  const [tel, setTel] = useState("");
-  const [fechaEnt, setFE] = useState("");
-  const [anticipo, setAnt] = useState("");
-  const [metodo, setMet] = useState("Efectivo");
-  const [nota, setNota] = useState("");
-  const [descPct, setDescPct] = useState("");
+function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, generarPDF, pedidoBase}) {
+  const editando = !!pedidoBase;
+  const [cliente, setCli] = useState(editando ? (pedidoBase.cliente||"") : "");
+  const [tel, setTel] = useState(editando ? (pedidoBase.tel||"") : "");
+  const [fechaEnt, setFE] = useState(editando ? (pedidoBase.fechaEntrega||"") : "");
+  const [anticipo, setAnt] = useState(editando ? String(pedidoBase.anticipo||"") : "");
+  const [metodo, setMet] = useState(editando ? (pedidoBase.metodoPago||"Efectivo") : "Efectivo");
+  const [nota, setNota] = useState(editando ? (pedidoBase.nota||"") : "");
+  const [descPct, setDescPct] = useState(editando ? (pedidoBase.descuentoPct ? String(pedidoBase.descuentoPct) : "") : "");
   const pedidoSim = {items: items, productos: productos, descuentoPct: parseFloat(descPct)||0};
   const sub = (productos && productos.length > 0) ? 
     productos.reduce(function(s,prod){
@@ -1385,11 +1465,11 @@ function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, gene
   function guardar() {
     if (!cliente) { alert("El cliente es obligatorio"); return; }
     if (!fechaEnt) { alert("La fecha de entrega es obligatoria"); return; }
-    onGuardar({folio:nextFolio,cliente:cliente,tel:tel,fechaEntrega:fechaEnt,items:items,productos:productos,anticipo:ant,metodoPago:metodo,estado:"Pendiente",nota:nota,descuentoPct:desPct,imagen:null});
+    onGuardar({folio:nextFolio,cliente:cliente,tel:tel,fechaEntrega:fechaEnt,items:items,productos:productos,anticipo:ant,metodoPago:metodo,estado:(editando?(pedidoBase.estado||"Pendiente"):"Pendiente"),nota:nota,descuentoPct:desPct,imagen:null});
     onClose();
   }
   return (
-    <Modal title={"Nota #"+nextFolio} onClose={onClose} wide={true}>
+    <Modal title={(editando?"Editar #":"Nota #")+nextFolio} onClose={onClose} wide={true}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
         <div>
           <div style={{background:T.bgDark,borderRadius:8,padding:"10px 13px",marginBottom:12,border:"1px solid "+T.border}}>
@@ -1442,7 +1522,7 @@ function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, gene
       </div>
       <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
         <Btn variant="ghost" onClick={onClose}>Cancelar</Btn>
-        <Btn onClick={guardar} disabled={!cliente || !fechaEnt}>Guardar #{nextFolio}</Btn>
+        <Btn onClick={guardar} disabled={!cliente || !fechaEnt}>{editando?"Actualizar #"+nextFolio:"Guardar #"+nextFolio}</Btn>
       </div>
     </Modal>
   );
@@ -1867,7 +1947,7 @@ function VistaHoy({atrasados, proximos, listos, calcularTotal, calcularSaldo, di
 }
 
 // ── PEDIDOS ───────────────────────────────────────────────────
-function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuevoPedido}) {
+function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuevoPedido, onEditarConstructor}) {
   const [modalForm, setMF] = useState(false);
   const [modalDoc, setMD] = useState(null);
   const [modalPago, setMP] = useState(null);
@@ -1894,6 +1974,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
   });
 
   function openForm(p) {
+    if (p && onEditarConstructor) { onEditarConstructor(p); return; }
     if (p) {
       const itemsRehidratados = (p.items||[]).map(function(i){return Object.assign({},i,{precio:String(i.precio),productoId:i.productoId||uid(),notaProd:i.notaProd||""});});
       // Si no hay productos meta, generamos uno por cada productoId único
@@ -5189,6 +5270,7 @@ function App() {
   const [fechaAjuste, setFechaAjuste] = useState(null); // offset manual si el usuario ajusta
   const [horaAjuste, setHoraAjuste] = useState(null);
   const [cotizacionAEditar, setCotizacionAEditar] = useState(null);
+  const [pedidoAEditar, setPedidoAEditar] = useState(null);
   const saveTimer = React.useRef(null);
   const primeraVez = React.useRef(true);
   const recargandoRemoto = React.useRef(false);
@@ -5466,9 +5548,9 @@ function App() {
           </div>
         )}
         {tab==="dashboard" && <ErrorBoundary><TabDashboard pedidos={pedidos} cotizaciones={cotizaciones} costos={costos} gastos={gastos} stock={stock} ventasPOS={ventasPOS}/></ErrorBoundary>}
-        {tab==="cotizador" && <ErrorBoundary><TabCotizador insumos={insumos} molduras={molduras} nextFolio={nextFolio} setNextFolio={setNextFolio} nextFolioQ={nextFolioQ} setNextFolioQ={setNextFolioQ} onPedidoCreado={agregarPedido} onCotizacionCreada={agregarCot} setCotizadorDirty={setCotizadorDirty} stock={stock} cotizacionAEditar={cotizacionAEditar} onLimpiarEdicion={() => setCotizacionAEditar(null)} setCotizaciones={setCotizaciones}/></ErrorBoundary>}
+        {tab==="cotizador" && <ErrorBoundary><TabCotizador insumos={insumos} molduras={molduras} nextFolio={nextFolio} setNextFolio={setNextFolio} nextFolioQ={nextFolioQ} setNextFolioQ={setNextFolioQ} onPedidoCreado={agregarPedido} onCotizacionCreada={agregarCot} setCotizadorDirty={setCotizadorDirty} stock={stock} cotizacionAEditar={cotizacionAEditar} onLimpiarEdicion={() => setCotizacionAEditar(null)} setCotizaciones={setCotizaciones} pedidoAEditar={pedidoAEditar} onLimpiarEdicionPedido={() => setPedidoAEditar(null)} setPedidos={setPedidos}/></ErrorBoundary>}
         {tab==="cotizaciones" && <ErrorBoundary><TabCotizaciones cotizaciones={cotizaciones} setCotizaciones={setCotizaciones} onConvertir={convertirCot} nextFolio={nextFolio} onModificar={(c) => { setCotizacionAEditar(c); setTab("cotizador"); }}/></ErrorBoundary>}
-        {tab==="pedidos" && <ErrorBoundary><TabPedidos pedidos={pedidos} setPedidos={setPedidos} nextFolio={nextFolio} setNextFolio={setNextFolio} stock={stock} onNuevoPedido={() => setTab("cotizador")}/></ErrorBoundary>}
+        {tab==="pedidos" && <ErrorBoundary><TabPedidos pedidos={pedidos} setPedidos={setPedidos} nextFolio={nextFolio} setNextFolio={setNextFolio} stock={stock} onNuevoPedido={() => setTab("cotizador")} onEditarConstructor={(p) => { setPedidoAEditar(p); setTab("cotizador"); }}/></ErrorBoundary>}
         {tab==="flujo" && <ErrorBoundary><TabFlujo pedidos={pedidos} setPedidos={setPedidos} molduras={molduras} insumos={insumos} stock={stock}/></ErrorBoundary>}
         {tab==="cxc" && <ErrorBoundary><TabCXC pedidos={pedidos} setPedidos={setPedidos}/></ErrorBoundary>}
         {tab==="pos" && <ErrorBoundary><TabPOS stock={stock} setStock={setStock} nextFolio={nextFolio} setNextFolio={setNextFolio} onVentaCreada={agregarVentaPOS}/></ErrorBoundary>}
