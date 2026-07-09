@@ -4829,8 +4829,43 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
       const pn = normalizarPedido(p);
       const tareas = Object.assign({}, pn.tareas || {});
       tareas[tareaKey] = !tareas[tareaKey];
+      // Sincronizar con imagen: si es tarea de impresión, propagar a la imagen del producto
+      const t = obtenerTareasPedido(pn, molduras, insumos, stock);
+      const impresionKeys = (t.impresion||[]).map(function(x){return x.id;});
+      if (impresionKeys.indexOf(tareaKey) >= 0) {
+        const tareaImp = (t.impresion||[]).find(function(x){return x.id === tareaKey;});
+        const prodId = tareaImp && tareaImp.productoId;
+        const meta = (pn.productos||[]).find(function(m){return m.id === prodId;});
+        if (meta && meta.imagen) {
+          // ¿Todas las impresiones de este producto están hechas?
+          const impDelProd = (t.impresion||[]).filter(function(x){return x.productoId === prodId;});
+          const todasHechas = impDelProd.every(function(x){return tareas[x.id];});
+          tareas["img_"+prodId] = todasHechas;
+        }
+      }
       const actualizado = Object.assign({}, pn, {tareas: tareas});
       // Auto-mover a Listo si todas las tareas completas
+      if (todasTareasCompletas(actualizado, molduras, insumos, stock)) {
+        return Object.assign(actualizado, {estado: "Listo"});
+      }
+      return actualizado;
+    }));
+  }
+
+  function toggleImagen(pedidoId, productoId) {
+    setPedidos(pedidos.map(function(p) {
+      if (p.id !== pedidoId) return p;
+      const pn = normalizarPedido(p);
+      const tareas = Object.assign({}, pn.tareas || {});
+      const key = "img_"+productoId;
+      const nuevoEstado = !tareas[key];
+      tareas[key] = nuevoEstado;
+      // Sincronizar tareas de impresión de ese producto
+      const t = obtenerTareasPedido(pn, molduras, insumos, stock);
+      (t.impresion||[]).forEach(function(x){
+        if (x.productoId === productoId) tareas[x.id] = nuevoEstado;
+      });
+      const actualizado = Object.assign({}, pn, {tareas: tareas});
       if (todasTareasCompletas(actualizado, molduras, insumos, stock)) {
         return Object.assign(actualizado, {estado: "Listo"});
       }
@@ -4997,26 +5032,39 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
                       const dias = diasParaEntrega(pedido.fechaEntrega);
                       const colorDia = colorDiasEntrega(dias);
                       const textoDia = textoDiasEntrega(dias);
+                      const doneImg = !!((pedido.tareas||{})["img_"+meta.id]);
                       return (
-                        <div key={String(pedido.id)+"-"+String(meta.id)+"-"+ii} style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:"8px 9px",marginBottom:8}}>
-                          {meta.fileId ? (
-                            <a href={'https://drive.google.com/uc?export=download&id='+meta.fileId} download={"pedido_"+pedido.folio+"_"+((meta.titulo||"img").replace(/[^a-z0-9]/gi,"_"))+".jpg"} target="_blank" rel="noreferrer" style={{display:"block"}}>
-                              <img src={meta.imagen} alt="ref" style={{width:"100%",maxHeight:150,objectFit:"contain",background:"#fff",borderRadius:5,border:"1px solid #F0B060",cursor:"pointer"}}/>
-                            </a>
-                          ) : (
-                            <img src={meta.imagen} alt="ref" style={{width:"100%",maxHeight:150,objectFit:"contain",background:"#fff",borderRadius:5,border:"1px solid #F0B060"}}/>
-                          )}
+                        <div key={String(pedido.id)+"-"+String(meta.id)+"-"+ii} style={{background:doneImg?"#F5F5F5":T.bgCard,border:"1px solid "+(doneImg?T.green+"60":T.border),borderRadius:8,padding:"8px 9px",marginBottom:8,opacity:doneImg?0.65:1,transition:"opacity 0.2s"}}>
+                          <div style={{position:"relative"}}>
+                            {meta.fileId ? (
+                              <a href={'https://drive.google.com/uc?export=download&id='+meta.fileId} download={"pedido_"+pedido.folio+"_"+((meta.titulo||"img").replace(/[^a-z0-9]/gi,"_"))+".jpg"} target="_blank" rel="noreferrer" style={{display:"block"}}>
+                                <img src={meta.imagen} alt="ref" style={{width:"100%",maxHeight:150,objectFit:"contain",background:"#fff",borderRadius:5,border:"1px solid #F0B060",cursor:"pointer",filter:doneImg?"grayscale(70%)":"none"}}/>
+                              </a>
+                            ) : (
+                              <img src={meta.imagen} alt="ref" style={{width:"100%",maxHeight:150,objectFit:"contain",background:"#fff",borderRadius:5,border:"1px solid #F0B060",filter:doneImg?"grayscale(70%)":"none"}}/>
+                            )}
+                            {doneImg && <div style={{position:"absolute",top:6,right:6,background:T.green,color:"#fff",borderRadius:"50%",width:26,height:26,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,boxShadow:"0 1px 3px rgba(0,0,0,0.3)"}}>✓</div>}
+                          </div>
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6,gap:6}}>
                             <div style={{flex:1,minWidth:0}}>
                               <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
-                                <span style={{fontFamily:FONT,fontWeight:700,fontSize:12}}>#{pedido.folio}</span>
+                                <span style={{fontFamily:FONT,fontWeight:700,fontSize:12,textDecoration:doneImg?"line-through":"none"}}>#{pedido.folio}</span>
                                 {dias!==null && <span style={{background:colorDia,color:"#fff",borderRadius:8,padding:"1px 6px",fontSize:9,fontWeight:700,fontFamily:FS}}>{textoDia}</span>}
                               </div>
-                              <div style={{fontSize:11,color:T.textSub,fontFamily:FS,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{pedido.cliente}</div>
+                              <div style={{fontSize:11,color:T.textSub,fontFamily:FS,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",textDecoration:doneImg?"line-through":"none"}}>{pedido.cliente}</div>
                               {meta.titulo && <div style={{fontSize:10,color:T.textFade,fontFamily:FS,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{meta.titulo}</div>}
                             </div>
                           </div>
-                          {meta.fileId && <div style={{fontSize:9,color:T.textFade,fontFamily:FS,marginTop:2,textAlign:"center"}}>📥 Click para descargar / abrir</div>}
+                          <label style={{display:"flex",alignItems:"center",gap:7,marginTop:7,padding:"5px 6px",background:doneImg?"#E8F5E9":T.bgDark,borderRadius:5,cursor:"pointer",border:"1px solid "+(doneImg?T.green+"40":T.border)}}>
+                            <input
+                              type="checkbox"
+                              checked={doneImg}
+                              onChange={function(){ toggleImagen(pedido.id, meta.id); }}
+                              style={{width:16,height:16,cursor:"pointer",accentColor:T.green,flexShrink:0}}
+                            />
+                            <span style={{fontFamily:FS,fontSize:11,fontWeight:600,color:doneImg?T.green:T.textSub}}>{doneImg?"Imagen lista":"Marcar imagen como hecha"}</span>
+                          </label>
+                          {meta.fileId && !doneImg && <div style={{fontSize:9,color:T.textFade,fontFamily:FS,marginTop:4,textAlign:"center"}}>📥 Click en imagen para descargar</div>}
                         </div>
                       );
                     })
@@ -5058,6 +5106,21 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
                           <div key={pid} style={{background:gi%2===0?"transparent":"rgba(0,0,0,0.02)",borderRadius:5,padding:titulo?"5px 4px":"0",marginBottom:titulo?8:0,borderLeft:titulo?"2px solid "+T.border:"none"}}>
                             {titulo && <div style={{fontFamily:FONT,fontSize:12,fontWeight:700,color:T.textSub,marginBottom:3,paddingLeft:4}}>{titulo}</div>}
                             {notaProd && <div style={{fontSize:11,color:T.amber,fontFamily:FS,fontStyle:"italic",marginBottom:4,padding:"3px 6px",background:"#FFF8E0",borderRadius:4}}>📝 {notaProd}</div>}
+                            {meta && meta.imagen && (function(){
+                              const doneImg = !!done["img_"+meta.id];
+                              return (
+                                <label style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",marginBottom:6,background:doneImg?"#E8F5E9":"#FFF3E0",borderRadius:6,cursor:"pointer",border:"1px solid "+(doneImg?T.green+"40":"#F0B060")}}>
+                                  <input
+                                    type="checkbox"
+                                    checked={doneImg}
+                                    onChange={function(){ toggleImagen(pedido.id, meta.id); }}
+                                    style={{width:17,height:17,cursor:"pointer",accentColor:T.green,flexShrink:0}}
+                                  />
+                                  <img src={meta.imagen} alt="ref" style={{width:38,height:38,objectFit:"cover",borderRadius:4,border:"1px solid "+T.border,filter:doneImg?"grayscale(70%)":"none"}}/>
+                                  <span style={{fontFamily:FS,fontSize:12,fontWeight:600,color:doneImg?T.green:"#C8860A",textDecoration:doneImg?"line-through":"none"}}>{doneImg?"Imagen lista":"Imagen a producir"}</span>
+                                </label>
+                              );
+                            })()}
                             {grupos[pid].map(function(x) {
                               const t = x.t;
                               const si = stageInfo[x.sid];
