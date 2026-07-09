@@ -1465,7 +1465,7 @@ function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, gene
   function guardar() {
     if (!cliente) { alert("El cliente es obligatorio"); return; }
     if (!fechaEnt) { alert("La fecha de entrega es obligatoria"); return; }
-    onGuardar({folio:nextFolio,cliente:cliente,tel:tel,fechaEntrega:fechaEnt,items:items,productos:productos,anticipo:ant,metodoPago:metodo,estado:(editando?(pedidoBase.estado||"Pendiente"):"Pendiente"),nota:nota,descuentoPct:desPct,imagen:null});
+    onGuardar({folio:nextFolio,cliente:cliente,tel:tel,fechaEntrega:fechaEnt,items:items,productos:productos,anticipo:ant,metodoPago:metodo,estado:(editando?(pedidoBase.estado||"Pendiente"):"Produccion"),nota:nota,descuentoPct:desPct,imagen:null});
     onClose();
   }
   return (
