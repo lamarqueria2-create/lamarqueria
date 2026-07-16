@@ -4795,11 +4795,15 @@ function clasificarItem(item, molduras, insumos, stock) {
 function obtenerTareasPedido(pedido, molduras, insumos, stock) {
   const out = {carpinteria:[], impresion:[], detallado:[]};
   const pn = normalizarPedido(pedido);
+  const prods = pn.productos || [];
   (pn.items || []).forEach(function(it, i) {
     if (!it) return;
     const stage = clasificarItem(it, molduras, insumos, stock);
     if (stage && out[stage]) {
-      out[stage].push({id: stage.slice(0,4)+"_"+i, item: it, itemIndex: i, productoId: it.productoId || "default"});
+      const pid = it.productoId || "default";
+      const prod = prods.find(function(m){ return m.id === pid; });
+      const cant = prod ? (parseFloat(prod.cantidad)||1) : (parseFloat(it.cantidad)||1);
+      out[stage].push({id: stage.slice(0,4)+"_"+i, item: it, itemIndex: i, productoId: pid, cantidad: cant});
     }
   });
   return out;
@@ -5053,6 +5057,7 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
                               </div>
                               <div style={{fontSize:11,color:T.textSub,fontFamily:FS,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",textDecoration:doneImg?"line-through":"none"}}>{pedido.cliente}</div>
                               {meta.titulo && <div style={{fontSize:10,color:T.textFade,fontFamily:FS,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{meta.titulo}</div>}
+                              {(parseFloat(meta.cantidad)||1) > 1 && <div style={{fontSize:10,color:T.blue,fontFamily:FS,fontWeight:700,marginTop:1}}>{parseFloat(meta.cantidad)} piezas iguales</div>}
                             </div>
                           </div>
                           <label style={{display:"flex",alignItems:"center",gap:7,marginTop:7,padding:"5px 6px",background:doneImg?"#E8F5E9":T.bgDark,borderRadius:5,cursor:"pointer",border:"1px solid "+(doneImg?T.green+"40":T.border)}}>
@@ -5104,7 +5109,7 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
                         const notaProd = meta ? meta.nota : "";
                         return (
                           <div key={pid} style={{background:gi%2===0?"transparent":"rgba(0,0,0,0.02)",borderRadius:5,padding:titulo?"5px 4px":"0",marginBottom:titulo?8:0,borderLeft:titulo?"2px solid "+T.border:"none"}}>
-                            {titulo && <div style={{fontFamily:FONT,fontSize:12,fontWeight:700,color:T.textSub,marginBottom:3,paddingLeft:4}}>{titulo}</div>}
+                            {titulo && <div style={{fontFamily:FONT,fontSize:12,fontWeight:700,color:T.textSub,marginBottom:3,paddingLeft:4}}>{titulo}{meta && (parseFloat(meta.cantidad)||1) > 1 ? <span style={{color:T.blue,marginLeft:5}}>· {parseFloat(meta.cantidad)} piezas</span> : null}</div>}
                             {notaProd && <div style={{fontSize:11,color:T.amber,fontFamily:FS,fontStyle:"italic",marginBottom:4,padding:"3px 6px",background:"#FFF8E0",borderRadius:4}}>📝 {notaProd}</div>}
                             {meta && meta.imagen && (function(){
                               const doneImg = !!done["img_"+meta.id];
@@ -5136,6 +5141,7 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
                                   <div style={{flex:1,minWidth:0}}>
                                     <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
                                       <span style={{width:7,height:7,borderRadius:"50%",background:si.color,flexShrink:0,display:"inline-block"}}/>
+                                      {(t.cantidad||1) > 1 && <span style={{background:si.color,color:"#fff",borderRadius:4,padding:"1px 6px",fontSize:11,fontWeight:700,fontFamily:FONT,flexShrink:0}}>{t.cantidad}×</span>}
                                       <span style={{fontFamily:FS,fontSize:13,fontWeight:600,color:checked?T.textFade:T.text,textDecoration:checked?"line-through":"none"}}>{t.item.nombre}</span>
                                       <span style={{fontSize:9,color:si.color,fontFamily:FS,fontWeight:600}}>{si.label}</span>
                                     </div>
