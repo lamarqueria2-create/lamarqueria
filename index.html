@@ -146,9 +146,18 @@ function parsearJSON(v) {
 }
 function normalizarPedido(p) {
   if (!p) return p;
+  const prods = parsearJSON(p.productos);
+  // Reconstruir la vista previa desde Drive cuando no viene la miniatura base64
+  // (no se guarda en Sheets para no inflar/truncar la celda). Con el fileId basta.
+  const prodsConImg = Array.isArray(prods) ? prods.map(function(pr){
+    if (pr && !pr.imagen && pr.fileId) {
+      return Object.assign({}, pr, {imagen: "https://drive.google.com/thumbnail?id=" + pr.fileId + "&sz=w1000"});
+    }
+    return pr;
+  }) : prods;
   return Object.assign({}, p, {
     items: parsearJSON(p.items),
-    productos: parsearJSON(p.productos),
+    productos: prodsConImg,
     tareas: (p.tareas && typeof p.tareas === "string") ? (() => { try { return JSON.parse(p.tareas); } catch(e) { return {}; } })() : (p.tareas || {})
   });
 }
@@ -1159,7 +1168,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   // Build flat items with productoId tagging + productos metadata array
   const todosItems = productos.flatMap(p => p.lineas.map(l => ({nombre:l.nombre,descripcion:l.descripcion,precio:l.precio,productoId:p.id})))
                       .concat(lineas.map(l => ({nombre:l.nombre,descripcion:l.descripcion,precio:l.precio,productoId:"_curso"})));
-  const productosMeta = productos.map(p => ({id:p.id, titulo:(p.esStock ? p.titulo : "Cuadro "+(p.alto)+"x"+(p.ancho)+"cm"), nota:p.nota||"", imagen:p.imagen||null, fileId:p.fileId||null, stockId:p.stockId||null, cantidad: parseFloat(p.cantidad)||1}))
+  const productosMeta = productos.map(p => ({id:p.id, titulo:(p.esStock ? p.titulo : "Cuadro "+(p.alto)+"x"+(p.ancho)+"cm"), nota:p.nota||"", imagen:p.imagen||p.imagenDrive||null, fileId:p.fileId||null, stockId:p.stockId||null, cantidad: parseFloat(p.cantidad)||1}))
                           .concat(lineas.length ? [{id:"_curso", titulo:"Cuadro "+alto+"x"+ancho+"cm", nota:"", imagen:null, cantidad:1}] : []);
   const totalTotal = productos.reduce(function(s,p){
     const sub = p.lineas.reduce(function(ss,l){return ss+(parseFloat(l.precio)||0);},0);
@@ -1283,6 +1292,34 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   function actualizarProductoCot(id, field, val) {
     setProductos(function(prev) { return prev.map(function(p){ return p.id===id ? Object.assign({},p,{[field]:val}) : p; }); });
   }
+  function subirImagenDriveCot(pid, base64Original) {
+    // Sube SIEMPRE el original a Drive y captura el fileId, se pueda o no generar
+    // la miniatura local. Formatos como HEIC (iPhone) no se decodifican en canvas,
+    // pero Drive sí genera su propia miniatura, así que la usamos de respaldo.
+    fetch(API_URL, {
+      method:'POST', headers:{"Content-Type":"text/plain"},
+      body: JSON.stringify({accion:'subir_imagen', imagen:base64Original, nombre:'cotizacion_producto'})
+    }).then(function(r){ return r.json(); }).then(function(data){
+      if (data && data.ok && data.fileId) {
+        const driveThumb = "https://drive.google.com/thumbnail?id=" + data.fileId + "&sz=w1000";
+        setProductos(function(prev){ return prev.map(function(p){
+          if (p.id !== pid) return p;
+          return Object.assign({}, p, {
+            fileId: data.fileId,
+            imagenDrive: driveThumb,
+            imagen: p.imagen || driveThumb,  // si no hubo miniatura local (HEIC), usa la de Drive
+            subiendo: false
+          });
+        }); });
+      } else {
+        actualizarProductoCot(pid, "subiendo", false);
+      }
+    }).catch(function(err){
+      console.warn("Drive falló: " + err.message);
+      actualizarProductoCot(pid, "subiendo", false);
+    });
+  }
+
   function handleImgProductoCot(pid, e) {
     const f = e.target.files[0];
     if (!f) return;
@@ -1290,32 +1327,30 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
     const r = new FileReader();
     r.onload = function(ev) {
       const base64Original = ev.target.result;
+      // 1) Subir SIEMPRE el original a Drive (no dependemos de que el navegador
+      //    pueda decodificar el formato; así ninguna imagen se pierde).
+      subirImagenDriveCot(pid, base64Original);
+      // 2) Intentar miniatura local para vista previa instantánea.
       const img = new Image();
       img.onload = function() {
-        const canvas = document.createElement('canvas');
-        const maxDim = 360;
-        let w = img.width, h = img.height;
-        if (w > h && w > maxDim) { h = h * maxDim / w; w = maxDim; }
-        else if (h > maxDim) { w = w * maxDim / h; h = maxDim; }
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0,0,w,h);
-        ctx.drawImage(img, 0, 0, w, h);
-        const thumbnail = canvas.toDataURL('image/jpeg', 0.68);
-        setProductos(function(prev){ return prev.map(function(p){ return p.id===pid ? Object.assign({},p,{imagen:thumbnail, subiendo:false}) : p; }); });
-        // Subir original a Drive en paralelo
-        fetch(API_URL, {
-          method:'POST', headers:{"Content-Type":"text/plain"},
-          body: JSON.stringify({accion:'subir_imagen', imagen:base64Original, nombre:'cotizacion_producto'})
-        }).then(r=>r.json()).then(data=>{
-          if (data && data.ok && data.fileId) {
-            setProductos(function(prev){ return prev.map(function(p){ return p.id===pid ? Object.assign({},p,{fileId:data.fileId}) : p; }); });
-          }
-        }).catch(err=>{console.warn("Drive falló: "+err.message);});
+        try {
+          const canvas = document.createElement('canvas');
+          const maxDim = 360;
+          let w = img.width, h = img.height;
+          if (w > h && w > maxDim) { h = h * maxDim / w; w = maxDim; }
+          else if (h > maxDim) { w = w * maxDim / h; h = maxDim; }
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h);
+          ctx.drawImage(img, 0, 0, w, h);
+          const thumbnail = canvas.toDataURL('image/jpeg', 0.68);
+          // Vista previa inmediata; subiendo sigue true hasta que Drive confirme.
+          setProductos(function(prev){ return prev.map(function(p){ return p.id===pid ? Object.assign({},p,{imagen:thumbnail, subiendo:false}) : p; }); });
+        } catch(err) { /* si el canvas falla, la miniatura de Drive servirá de respaldo */ }
       };
       img.onerror = function(){
-        actualizarProductoCot(pid, "subiendo", false);
+        // Formato no decodificable en el navegador (p.ej. HEIC de iPhone):
+        // dejamos subiendo=true; la miniatura de Drive llegará por subirImagenDriveCot.
       };
       img.src = base64Original;
     };
@@ -2365,69 +2400,61 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
       return Object.assign({},prev,{productos:productos});
     });
 
+    function subirADrive(base64Original) {
+      const tituloProd = (function(){
+        const prod = (form.productos||[]).find(function(p){return p.id===pid;});
+        return prod ? prod.titulo : "imagen";
+      })() || "imagen";
+      fetch(API_URL, {
+        method: 'POST', headers: {"Content-Type": "text/plain"},
+        body: JSON.stringify({accion:'subir_imagen', imagen:base64Original, nombre:tituloProd})
+      }).then(function(resp){ return resp.json(); }).then(function(data){
+        if (data && data.ok && data.fileId) {
+          const driveThumb = "https://drive.google.com/thumbnail?id=" + data.fileId + "&sz=w1000";
+          setForm(function(prev) {
+            const productos = (prev.productos||[]).map(function(p){
+              return p.id===pid ? Object.assign({},p,{fileId:data.fileId, imagenDrive:driveThumb, imagen:(p.imagen||driveThumb), subiendo:false}) : p;
+            });
+            return Object.assign({},prev,{productos:productos});
+          });
+        } else {
+          setForm(function(prev){ const productos=(prev.productos||[]).map(function(p){return p.id===pid?Object.assign({},p,{subiendo:false}):p;}); return Object.assign({},prev,{productos:productos}); });
+        }
+      }).catch(function(err){
+        console.warn("Drive upload failed: " + err.message);
+        setForm(function(prev){ const productos=(prev.productos||[]).map(function(p){return p.id===pid?Object.assign({},p,{subiendo:false}):p;}); return Object.assign({},prev,{productos:productos}); });
+      });
+    }
+
     const r = new FileReader();
     r.onload = function(ev) {
       const base64Original = ev.target.result;
-
-      // Generar thumbnail comprimido para visualización y guardado
+      // 1) Subir SIEMPRE a Drive (aunque el navegador no decodifique el formato, p.ej. HEIC).
+      subirADrive(base64Original);
+      // 2) Intentar miniatura local para vista previa instantánea.
       const img = new Image();
       img.onload = function() {
-        const canvas = document.createElement('canvas');
-        const maxDim = 360; // Max 360px → ~10-15KB en base64 jpeg
-        let w = img.width, h = img.height;
-        if (w > h && w > maxDim) { h = h * maxDim / w; w = maxDim; }
-        else if (h > maxDim) { w = w * maxDim / h; h = maxDim; }
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0,0,w,h);
-        ctx.drawImage(img, 0, 0, w, h);
-        const thumbnail = canvas.toDataURL('image/jpeg', 0.68);
-
-        // Asignar imagen y nombre del archivo en una sola actualización funcional
-        setForm(function(prev) {
-          const productos = (prev.productos||[]).map(function(p){
-            return p.id===pid ? Object.assign({},p,{imagen:thumbnail, subiendo:false}) : p;
-          });
-          return Object.assign({},prev,{productos:productos});
-        });
-
-        // Subir original a Drive en paralelo (no afecta visualización)
-        const tituloProd = (function(){
-          const prod = (form.productos||[]).find(function(p){return p.id===pid;});
-          return prod ? prod.titulo : "imagen";
-        })() || "imagen";
-
-        fetch(API_URL, {
-          method: 'POST',
-          headers: {"Content-Type": "text/plain"},
-          body: JSON.stringify({
-            accion: 'subir_imagen',
-            imagen: base64Original,
-            nombre: tituloProd
-          })
-        })
-        .then(resp => resp.json())
-        .then(data => {
-          if (data && data.ok && data.fileId) {
-            setForm(function(prev) {
-              const productos = (prev.productos||[]).map(function(p){
-                return p.id===pid ? Object.assign({},p,{fileId:data.fileId}) : p;
-              });
-              return Object.assign({},prev,{productos:productos});
+        try {
+          const canvas = document.createElement('canvas');
+          const maxDim = 360;
+          let w = img.width, h = img.height;
+          if (w > h && w > maxDim) { h = h * maxDim / w; w = maxDim; }
+          else if (h > maxDim) { w = w * maxDim / h; h = maxDim; }
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h);
+          ctx.drawImage(img, 0, 0, w, h);
+          const thumbnail = canvas.toDataURL('image/jpeg', 0.68);
+          setForm(function(prev) {
+            const productos = (prev.productos||[]).map(function(p){
+              return p.id===pid ? Object.assign({},p,{imagen:thumbnail, subiendo:false}) : p;
             });
-          }
-        })
-        .catch(err => {
-          console.warn("Drive upload failed (image still works locally): " + err.message);
-        });
+            return Object.assign({},prev,{productos:productos});
+          });
+        } catch(err) { /* la miniatura de Drive servirá de respaldo */ }
       };
       img.onerror = function() {
-        setForm(function(prev) {
-          const productos = (prev.productos||[]).map(function(p){return p.id===pid?Object.assign({},p,{subiendo:false}):p;});
-          return Object.assign({},prev,{productos:productos});
-        });
-        alert("No se pudo procesar la imagen.");
+        // Formato no decodificable (HEIC): dejamos subiendo=true; Drive dará la miniatura.
       };
       img.src = base64Original;
     };
@@ -5896,7 +5923,19 @@ function App() {
       const pedidosLimpios = pedidos.map(function(p) {
         const tot = calcularTotal(p);
         const saldo = calcularSaldo(p);
-        return Object.assign({}, p, {imagen: null, total: tot, saldo: saldo});
+        // No guardar miniaturas base64 dentro de productos: inflan la celda JSON
+        // y el backend la trunca (>49k) corrompiendo TODO el pedido. Guardamos solo
+        // el fileId; la imagen se reconstruye desde Drive al recargar (normalizarPedido).
+        const prods = parsearJSON(p.productos);
+        const productosLimpios = Array.isArray(prods) ? prods.map(function(pr){
+          if (!pr || typeof pr !== "object") return pr;
+          const out = Object.assign({}, pr);
+          if (typeof out.imagen === "string" && out.imagen.indexOf("data:") === 0) out.imagen = null;
+          if (typeof out.imagenDrive === "string" && out.imagenDrive.indexOf("data:") === 0) out.imagenDrive = null;
+          delete out.subiendo;
+          return out;
+        }) : prods;
+        return Object.assign({}, p, {imagen: null, productos: productosLimpios, total: tot, saldo: saldo});
       });
       const payload = JSON.stringify({
         accion: "guardar_todo",
