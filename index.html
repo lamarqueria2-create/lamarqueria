@@ -3059,10 +3059,46 @@ function TabPOS({stock, setStock, nextFolio, setNextFolio, onVentaCreada}) {
 }
 
 // ── COSTOS / GASTOS ───────────────────────────────────────────
-function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) {
+// ── Select con opción de dar de alta un valor nuevo al vuelo ──
+// opciones: array de strings. onAgregar(nombre): agrega al catálogo y devuelve el nuevo registro.
+function SelectAlta({label, value, onChange, opciones, onAgregar, placeholder}) {
+  const [alta, setAlta] = React.useState(false);
+  const [txt, setTxt] = React.useState("");
+  function confirmarAlta() {
+    const n = (txt||"").trim();
+    if (!n) { setAlta(false); return; }
+    if (onAgregar) onAgregar(n);
+    onChange({target:{value:n}});
+    setTxt("");
+    setAlta(false);
+  }
+  return (
+    <div style={{marginBottom:10}}>
+      {label && <label style={{color:T.textSub,fontSize:11,display:"block",marginBottom:3,fontFamily:FS,fontWeight:600}}>{label}</label>}
+      <div style={{display:"flex",gap:6}}>
+        <select value={value||""} onChange={onChange} style={{flex:1,background:T.bgCard,border:"1px solid "+T.border,borderRadius:7,padding:"8px 11px",color:T.text,fontFamily:FS,fontSize:13,outline:"none"}}>
+          {placeholder && <option value="">{placeholder}</option>}
+          {(opciones||[]).map(function(o){ return <option key={o} value={o}>{o}</option>; })}
+        </select>
+        <button type="button" onClick={function(){ setAlta(true); }} title="Agregar nuevo" style={{flexShrink:0,width:36,background:T.blue,color:"#fff",border:"none",borderRadius:7,cursor:"pointer",fontSize:18,fontWeight:700,lineHeight:1}}>+</button>
+      </div>
+      {alta && (
+        <div style={{display:"flex",gap:6,marginTop:6}}>
+          <input autoFocus value={txt} onChange={function(e){ setTxt(e.target.value); }} onKeyDown={function(e){ if(e.key==="Enter"){ e.preventDefault(); confirmarAlta(); } }} placeholder="Nombre nuevo…" style={{flex:1,background:T.bgCard,border:"1px solid "+T.blue,borderRadius:7,padding:"7px 10px",color:T.text,fontFamily:FS,fontSize:12,outline:"none"}}/>
+          <button type="button" onClick={confirmarAlta} style={{background:T.green,color:"#fff",border:"none",borderRadius:7,padding:"0 12px",cursor:"pointer",fontSize:12,fontWeight:700}}>Guardar</button>
+          <button type="button" onClick={function(){ setAlta(false); setTxt(""); }} style={{background:"none",border:"1px solid "+T.border,borderRadius:7,padding:"0 10px",cursor:"pointer",fontSize:12,color:T.textFade}}>Cancelar</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TabRegistros({tipo, registros, setRegistros, categorias, onAgregarCategoria, proveedores, onAgregarProveedor}) {
   const [modal, setModal] = useState(false);
   const [editId, setEid] = useState(null);
-  const [form, setForm] = useState({concepto:"",categoria:categorias[0],monto:"",fecha:HOY,proveedor:"",nota:""});
+  const catNombres = (categorias||[]).map(function(c){ return c.nombre; });
+  const provNombres = (proveedores||[]).map(function(c){ return c.nombre; });
+  const [form, setForm] = useState({concepto:"",categoria:catNombres[0]||"",monto:"",fecha:HOY,proveedor:"",nota:""});
   const [nid, setNid] = useState(100);
   const [filMes, setFM] = useState("todos");
   const [filCat, setFC] = useState("Todos");
@@ -3071,7 +3107,7 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
 
   function openReg(g) {
     if (g) { setForm(Object.assign({},g,{monto:String(g.monto)})); setEid(g.id); }
-    else { setForm({concepto:"",categoria:categorias[0],monto:"",fecha:HOY,proveedor:"",nota:""}); setEid(null); }
+    else { setForm({concepto:"",categoria:catNombres[0]||"",monto:"",fecha:HOY,proveedor:"",nota:""}); setEid(null); }
     setModal(true);
   }
   function save() {
@@ -3100,7 +3136,7 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
     return fechaOk && catOk;
   });
   const total = lista.reduce((s,g) => s+(parseFloat(g.monto)||0), 0);
-  const porCat = categorias.map(function(c) { return {cat:c,total:lista.filter(g => norm(g.categoria)===norm(c)).reduce((s,g) => s+(parseFloat(g.monto)||0),0)}; }).filter(c => c.total>0);
+  const porCat = catNombres.map(function(c) { return {cat:c,total:lista.filter(g => norm(g.categoria)===norm(c)).reduce((s,g) => s+(parseFloat(g.monto)||0),0)}; }).filter(c => c.total>0);
   const maxC = Math.max.apply(null, porCat.map(c => c.total).concat([1]));
 
   // Ordenamiento robusto: fechas inválidas/vacías al final, desempate por id
@@ -3141,9 +3177,9 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
             const extra = [];
             registros.forEach(function(g){
               const c = ((g.categoria||"")+"").trim();
-              if (c && categorias.map(function(x){return norm(x);}).indexOf(norm(c)) < 0 && extra.map(function(x){return norm(x);}).indexOf(norm(c)) < 0) extra.push(c);
+              if (c && catNombres.map(function(x){return norm(x);}).indexOf(norm(c)) < 0 && extra.map(function(x){return norm(x);}).indexOf(norm(c)) < 0) extra.push(c);
             });
-            return ["Todos"].concat(categorias).concat(extra);
+            return ["Todos"].concat(catNombres).concat(extra);
           })().map(function(c) {
             const activo = norm(filCat)===norm(c) || (c==="Todos" && filCat==="Todos");
             return <button key={c} onClick={() => setFC(c)} style={{background:activo?T.header:"transparent",color:activo?"#fff":T.textSub,border:"1px solid "+(activo?T.header:T.border),borderRadius:14,padding:"4px 10px",fontSize:11,cursor:"pointer",fontFamily:FS,fontWeight:activo?700:400}}>{c}</button>;
@@ -3200,8 +3236,8 @@ function TabRegistros({tipo, registros, setRegistros, categorias, proveedores}) 
       {modal && (
         <Modal title={editId?"Editar":"Nuevo "+tipo} onClose={() => setModal(false)}>
           <Inp label="Concepto *" value={form.concepto} onChange={e => setForm(Object.assign({},form,{concepto:e.target.value}))} placeholder={esCosto?"Ej: Marcos Cuadropolis...":"Ej: Nomina Charly..."}/>
-          <Sel label="Categoria" value={form.categoria} onChange={e => setForm(Object.assign({},form,{categoria:e.target.value}))}>{categorias.map(c => <option key={c}>{c}</option>)}</Sel>
-          {esCosto && proveedores && <Sel label="Proveedor" value={form.proveedor||""} onChange={e => setForm(Object.assign({},form,{proveedor:e.target.value}))}><option value="">— Seleccionar —</option>{proveedores.map(p => <option key={p}>{p}</option>)}</Sel>}
+          <SelectAlta label="Categoria" value={form.categoria} onChange={e => setForm(Object.assign({},form,{categoria:e.target.value}))} opciones={catNombres} onAgregar={onAgregarCategoria}/>
+          <SelectAlta label="Proveedor" value={form.proveedor||""} onChange={e => setForm(Object.assign({},form,{proveedor:e.target.value}))} opciones={provNombres} onAgregar={onAgregarProveedor} placeholder="— Seleccionar —"/>
           <Inp label="Monto ($) *" type="number" value={form.monto} onChange={e => setForm(Object.assign({},form,{monto:e.target.value}))}/>
           <Inp label="Fecha" type="date" value={form.fecha} onChange={e => setForm(Object.assign({},form,{fecha:e.target.value}))}/>
           <Inp label="Nota" value={form.nota} onChange={e => setForm(Object.assign({},form,{nota:e.target.value}))}/>
@@ -3808,7 +3844,7 @@ function ModalDetalleVentaPOS({venta, onClose, categoriaItem}) {
 }
 
 // ── BASES DE DATOS ────────────────────────────────────────────
-function TabBases({insumos, setInsumos, molduras, setMolduras, stock, setStock, temas, setTemas}) {
+function TabBases({insumos, setInsumos, molduras, setMolduras, stock, setStock, temas, setTemas, catCostos, setCatCostos, catGastos, setCatGastos, proveedoresReg, setProveedoresReg}) {
   const [sub, setSub] = useState("stock");
   const IS = {background:T.bgCard,border:"1px solid "+T.border,borderRadius:5,padding:"4px 7px",color:T.text,fontFamily:FS,fontSize:12,outline:"none",width:"100%"};
 
@@ -3867,7 +3903,7 @@ function TabBases({insumos, setInsumos, molduras, setMolduras, stock, setStock, 
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
         <div style={{fontFamily:FONT,fontSize:19,fontWeight:700}}>Bases de Datos</div>
         <div style={{display:"flex",border:"1px solid "+T.border,borderRadius:7,overflow:"hidden"}}>
-          {[["stock","Stock"],["molduras","Molduras"],["insumos","Insumos"],["temas","Temas"]].map(function(item) {
+          {[["stock","Stock"],["molduras","Molduras"],["insumos","Insumos"],["temas","Temas"],["categorias","Categorías"]].map(function(item) {
             return <button key={item[0]} onClick={() => setSub(item[0])} style={{background:sub===item[0]?T.bgDark:"transparent",color:sub===item[0]?T.text:T.textFade,border:"none",padding:"7px 14px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:sub===item[0]?700:400}}>{item[1]}</button>;
           })}
         </div>
@@ -3980,11 +4016,69 @@ function TabBases({insumos, setInsumos, molduras, setMolduras, stock, setStock, 
           )}
         </div>
       )}
+      {sub==="categorias" && (
+        <CatalogosRegistro
+          catCostos={catCostos} setCatCostos={setCatCostos}
+          catGastos={catGastos} setCatGastos={setCatGastos}
+          proveedoresReg={proveedoresReg} setProveedoresReg={setProveedoresReg}
+        />
+      )}
     </div>
   );
 }
 
-// ── INVENTARIO ────────────────────────────────────────────────
+// ── CATÁLOGOS de Costos/Gastos: categorías y proveedores ──
+// Bloque reutilizable de "tarjetas editables" (mismo patrón visual que Temas)
+function BloqueCatalogo({titulo, ayuda, items, setItems, prefijo, usados}) {
+  function contarUsos(nombre) {
+    return usados ? usados(nombre) : 0;
+  }
+  return (
+    <div style={{marginBottom:22}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <div>
+          <div style={{fontFamily:FONT,fontWeight:700,fontSize:14}}>{titulo}</div>
+          {ayuda && <div style={{color:T.textFade,fontSize:11,fontFamily:FS,marginTop:2}}>{ayuda}</div>}
+        </div>
+        <button onClick={function(){
+          const nuevo = {id:prefijo+"_"+uid(),nombre:""};
+          setItems(function(prev){ return [nuevo].concat(Array.isArray(prev)?prev:[]); });
+        }} style={{background:T.header,color:"#fff",border:"none",borderRadius:7,padding:"7px 16px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:600,flexShrink:0}}>+ Agregar</button>
+      </div>
+      {(items||[]).length === 0 ? (
+        <Card style={{textAlign:"center",padding:"22px"}}>
+          <div style={{color:T.textFade,fontSize:13,fontFamily:FS}}>Sin registros. Usa <strong>+ Agregar</strong> para comenzar.</div>
+        </Card>
+      ) : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+          {(items||[]).map(function(it) {
+            const usos = contarUsos(it.nombre);
+            return (
+              <div key={it.id} style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:"10px 12px",display:"flex",alignItems:"center",gap:8}}>
+                <input value={it.nombre||""} onChange={function(e){ setItems(items.map(function(x){return x.id===it.id?Object.assign({},x,{nombre:e.target.value}):x;})); }} placeholder="Nombre" style={{flex:1,background:T.bgDark,border:"1px solid "+T.border,borderRadius:5,padding:"5px 8px",color:T.text,fontFamily:FS,fontSize:12,fontWeight:600,outline:"none"}}/>
+                {usos > 0 && <span style={{fontSize:10,color:T.textFade,fontFamily:FS}}>{usos} uso{usos>1?"s":""}</span>}
+                <button onClick={function(){
+                  if (usos > 0 && !confirmar("Este valor ya se usó en "+usos+" registro(s) existentes (no se les quita, solo desaparece del catálogo). ¿Eliminar de todos modos?")) return;
+                  if (usos === 0 && !confirmar("¿Eliminar \""+it.nombre+"\"?")) return;
+                  setItems(items.filter(function(x){return x.id!==it.id;}));
+                }} style={{background:T.redBg,color:T.red,border:"1px solid "+T.red+"30",borderRadius:5,padding:"4px 9px",cursor:"pointer",fontFamily:FS,fontSize:11}}>✕</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+function CatalogosRegistro({catCostos, setCatCostos, catGastos, setCatGastos, proveedoresReg, setProveedoresReg}) {
+  return (
+    <div>
+      <BloqueCatalogo titulo="Categorías de Costos" ayuda="Aparecen al capturar un costo de producción." items={catCostos} setItems={setCatCostos} prefijo="cc"/>
+      <BloqueCatalogo titulo="Categorías de Gastos" ayuda="Aparecen al capturar un gasto operativo." items={catGastos} setItems={setCatGastos} prefijo="cg"/>
+      <BloqueCatalogo titulo="Proveedores" ayuda="Disponibles tanto en Costos como en Gastos." items={proveedoresReg} setItems={setProveedoresReg} prefijo="pv"/>
+    </div>
+  );
+}
 function TabInventario({stock, setStock}) {
   const [expandidos, setExpandidos] = useState({});
   const [busqueda, setBusqueda] = useState("");
@@ -5608,6 +5702,21 @@ function App() {
   const [costos, setCostos] = useState(COSTOS0);
   const [gastos, setGastos] = useState(GASTOS0);
   const [clientes, setClientes] = useState([]);
+  // Catálogos editables de Costos/Gastos (categorías y proveedores).
+  // Se siembran con los valores fijos de antes; si Sheets ya trae datos, esos mandan.
+  const [catCostos, setCatCostos] = useState(CAT_COSTOS.map(function(n,i){ return {id:"cc_"+i, nombre:n}; }));
+  const [catGastos, setCatGastos] = useState(CAT_GASTOS.map(function(n,i){ return {id:"cg_"+i, nombre:n}; }));
+  const [proveedoresReg, setProveedoresReg] = useState(PROVEEDORES.map(function(n,i){ return {id:"pv_"+i, nombre:n}; }));
+  // Helpers para agregar un valor nuevo a un catálogo (usado por "+" al vuelo y por administración)
+  function agregarACatalogo(setter) {
+    return function(nombre) {
+      const n = (nombre||"").trim();
+      if (!n) return null;
+      const nuevo = {id:"cat_"+Date.now()+"_"+Math.random().toString(36).slice(2,6), nombre:n};
+      setter(function(prev){ return (prev||[]).concat([nuevo]); });
+      return nuevo;
+    };
+  }
   const [nextFolioBase, setNextFolioBase] = useState(1590);
   const [nextFolioQ, setNextFolioQ] = useState(1);
   // nextFolio siempre = max(pedidos.folio, ventas.folio) + 1, garantiza único globalmente
@@ -5643,6 +5752,25 @@ function App() {
     });
   }
 
+  // Como asegurarIds, pero además REPARA ids duplicados (deja el primero igual,
+  // a los repetidos les asigna uno nuevo único). Esto es lo que causaba que la
+  // lista de Costos/Gastos no se refrescara visualmente al filtrar: React usa
+  // el id como key, y con ids repetidos "confunde" qué tarjeta es cuál.
+  function asegurarIdsUnicos(arr, prefijo) {
+    const conIds = asegurarIds(arr, prefijo);
+    const vistos = {};
+    return conIds.map(function(r, i) {
+      const idStr = String(r.id);
+      if (vistos[idStr]) {
+        const nuevoId = prefijo + "_" + Date.now() + "_" + i + "_" + Math.random().toString(36).slice(2,6);
+        vistos[nuevoId] = true;
+        return Object.assign({}, r, {id: nuevoId});
+      }
+      vistos[idStr] = true;
+      return r;
+    });
+  }
+
   function cargarDatos(esRemoto) {
     return fetch(API_URL + "?accion=leer_todo")
       .then(function(r) { return r.json(); })
@@ -5675,9 +5803,17 @@ function App() {
           setNextFolioQ(Math.max.apply(null, fqs) + 1);
         }
         if (data.ventas_pos && data.ventas_pos.length > 0) setVentasPOS(data.ventas_pos.map(function(v){ return Object.assign({},v,{items:parsearJSON(v.items)}); }));
-        if (data.costos && data.costos.length > 0) setCostos(asegurarIds(data.costos, 'c'));
-        if (data.gastos && data.gastos.length > 0) setGastos(asegurarIds(data.gastos, 'g'));
+        if (data.costos && data.costos.length > 0) setCostos(asegurarIdsUnicos(data.costos, 'c'));
+        if (data.gastos && data.gastos.length > 0) setGastos(asegurarIdsUnicos(data.gastos, 'g'));
         if (data.clientes && data.clientes.length > 0) setClientes(asegurarIds(data.clientes, 'cli'));
+        if (data.categorias_registro && data.categorias_registro.length > 0) {
+          const todas = asegurarIds(data.categorias_registro, 'cat');
+          const cc = todas.filter(function(c){ return (c.tipo||"") === "costo"; });
+          const cg = todas.filter(function(c){ return (c.tipo||"") === "gasto"; });
+          if (cc.length > 0) setCatCostos(cc);
+          if (cg.length > 0) setCatGastos(cg);
+        }
+        if (data.proveedores_registro && data.proveedores_registro.length > 0) setProveedoresReg(asegurarIds(data.proveedores_registro, 'pv'));
         if (data.stock && data.stock.length > 0) setStock(data.stock);
         if (data.insumos && data.insumos.length > 0) setInsumos(data.insumos);
         // Solo sobreescribir molduras si Sheets tiene MAS o IGUAL que las locales (preserva carga inicial del HTML)
@@ -5771,6 +5907,8 @@ function App() {
         costos: costos,
         gastos: gastos,
         clientes: clientes,
+        categorias_registro: (catCostos||[]).map(function(c){ return Object.assign({},c,{tipo:"costo"}); }).concat((catGastos||[]).map(function(c){ return Object.assign({},c,{tipo:"gasto"}); })),
+        proveedores_registro: proveedoresReg,
         stock: stock,
         insumos: insumos,
         molduras: molduras,
@@ -5794,7 +5932,7 @@ function App() {
         setGuardadoAt("\u26a0\ufe0f " + (err && err.message ? err.message.substring(0,40) : "Error de red"));
       });
     }, 3000);
-  }, [pedidos, cotizaciones, ventasPOS, costos, gastos, clientes, stock, insumos, molduras, temas]);
+  }, [pedidos, cotizaciones, ventasPOS, costos, gastos, clientes, catCostos, catGastos, proveedoresReg, stock, insumos, molduras, temas]);
 
   function agregarPedido(p) { setPedidos(function(ps) { return ps.concat([Object.assign({},p,{id:uid(),fecha:HOY})]); }); }
   function agregarCot(c) { setCotizaciones(function(cs) { return cs.concat([Object.assign({},c,{id:uid()})]); }); }
@@ -5917,9 +6055,9 @@ function App() {
         {tab==="notaspos" && <ErrorBoundary><TabNotasPOS ventasPOS={ventasPOS}/></ErrorBoundary>}
         {tab==="corte" && <ErrorBoundary><TabCorte pedidos={pedidos} ventasPOS={ventasPOS} stock={stock}/></ErrorBoundary>}
         {tab==="inventario" && <ErrorBoundary><TabInventario stock={stock} setStock={setStock}/></ErrorBoundary>}
-        {tab==="costos" && <ErrorBoundary><TabRegistros tipo="costo" registros={costos} setRegistros={setCostos} categorias={CAT_COSTOS} proveedores={PROVEEDORES}/></ErrorBoundary>}
-        {tab==="gastos" && <ErrorBoundary><TabRegistros tipo="gasto" registros={gastos} setRegistros={setGastos} categorias={CAT_GASTOS}/></ErrorBoundary>}
-        {tab==="bases" && <ErrorBoundary><TabBases insumos={insumos} setInsumos={setInsumos} molduras={molduras} setMolduras={setMolduras} stock={stock} setStock={setStock} temas={temas} setTemas={setTemas}/></ErrorBoundary>}
+        {tab==="costos" && <ErrorBoundary><TabRegistros tipo="costo" registros={costos} setRegistros={setCostos} categorias={catCostos} onAgregarCategoria={agregarACatalogo(setCatCostos)} proveedores={proveedoresReg} onAgregarProveedor={agregarACatalogo(setProveedoresReg)}/></ErrorBoundary>}
+        {tab==="gastos" && <ErrorBoundary><TabRegistros tipo="gasto" registros={gastos} setRegistros={setGastos} categorias={catGastos} onAgregarCategoria={agregarACatalogo(setCatGastos)} proveedores={proveedoresReg} onAgregarProveedor={agregarACatalogo(setProveedoresReg)}/></ErrorBoundary>}
+        {tab==="bases" && <ErrorBoundary><TabBases insumos={insumos} setInsumos={setInsumos} molduras={molduras} setMolduras={setMolduras} stock={stock} setStock={setStock} temas={temas} setTemas={setTemas} catCostos={catCostos} setCatCostos={setCatCostos} catGastos={catGastos} setCatGastos={setCatGastos} proveedoresReg={proveedoresReg} setProveedoresReg={setProveedoresReg}/></ErrorBoundary>}
       </div>
       {cotConvertir && <ModalConvertir cotizacion={cotConvertir} nextFolio={nextFolio} onClose={() => setCotConvertir(null)} onConfirmar={aplicarConversion}/>}
     </div>
