@@ -495,6 +495,110 @@ function Modal({title, onClose, children, wide}) {
     </div>
   );
 }
+// ── Campo de cliente con autocompletado + botón "nuevo cliente" ──
+// nombre/tel: valores actuales. onNombre: al escribir. onSelect(cliente): al elegir uno guardado.
+// onNuevo: abre modal de alta rápida. clientes: catálogo.
+function ClienteField({label, nombre, onNombre, onSelect, onNuevo, clientes}) {
+  const [focus, setFocus] = React.useState(false);
+  const q = (nombre||"").toLowerCase().trim();
+  const matches = q.length > 0
+    ? (clientes||[]).filter(function(c){ return (c.nombre||"").toLowerCase().indexOf(q) >= 0; }).slice(0,7)
+    : [];
+  return (
+    <div style={{marginBottom:10, position:"relative"}}>
+      {label && <label style={{color:T.textSub,fontSize:11,display:"block",marginBottom:3,fontFamily:FS,fontWeight:600}}>{label}</label>}
+      <div style={{display:"flex", gap:6, alignItems:"stretch"}}>
+        <div style={{flex:1, position:"relative"}}>
+          <input
+            value={nombre||""}
+            onChange={function(e){ onNombre(e.target.value); }}
+            onFocus={function(){ setFocus(true); }}
+            onBlur={function(){ setTimeout(function(){ setFocus(false); }, 150); }}
+            placeholder="Escribe para buscar o crear…"
+            style={{width:"100%",background:T.bgCard,border:"1px solid "+T.border,borderRadius:7,padding:"8px 11px",color:T.text,fontFamily:FS,fontSize:13,outline:"none",boxSizing:"border-box"}}
+          />
+          {focus && matches.length > 0 && (
+            <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:60,marginTop:3,background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,boxShadow:"0 8px 24px rgba(0,0,0,0.18)",maxHeight:230,overflowY:"auto"}}>
+              {matches.map(function(c){
+                return (
+                  <div key={c.id}
+                    onMouseDown={function(){ onSelect(c); setFocus(false); }}
+                    style={{padding:"7px 11px",cursor:"pointer",borderBottom:"1px solid "+T.border}}
+                    onMouseEnter={function(e){ e.currentTarget.style.background = T.bg; }}
+                    onMouseLeave={function(e){ e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <div style={{fontFamily:FS,fontSize:13,fontWeight:600,color:T.text}}>{c.nombre}</div>
+                    <div style={{fontFamily:FS,fontSize:11,color:T.textFade}}>
+                      {c.telefono || "sin tel"}{(parseFloat(c.descuento)||0) > 0 ? " · "+parseFloat(c.descuento)+"% desc" : ""}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <button onClick={onNuevo} title="Registrar cliente nuevo"
+          style={{flexShrink:0,width:38,background:T.blue,color:"#fff",border:"none",borderRadius:7,cursor:"pointer",fontSize:20,fontWeight:700,lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Modal de alta/edición rápida de cliente ──
+const REGIMENES = ["","605 - Sueldos y salarios","612 - Actividades empresariales y profesionales","621 - Incorporación fiscal","626 - RESICO","601 - General de ley personas morales","603 - Personas morales fines no lucrativos","616 - Sin obligaciones fiscales"];
+const USOS_CFDI = ["","G01 - Adquisición de mercancías","G03 - Gastos en general","P01 - Por definir","I01 - Construcciones","I08 - Otra maquinaria y equipo","D01 - Honorarios médicos","S01 - Sin efectos fiscales"];
+function ModalCliente({onClose, onGuardar, base}) {
+  const editando = !!(base && base.id);
+  const [nombre, setNombre]       = React.useState(base ? (base.nombre||"") : "");
+  const [telefono, setTelefono]   = React.useState(base ? (base.telefono||"") : "");
+  const [rfc, setRfc]             = React.useState(base ? (base.rfc||"") : "");
+  const [direccion, setDireccion] = React.useState(base ? (base.direccion||"") : "");
+  const [cp, setCp]               = React.useState(base ? (base.cp||"") : "");
+  const [regimen, setRegimen]     = React.useState(base ? (base.regimen||"") : "");
+  const [usoFactura, setUsoFactura] = React.useState(base ? (base.usoFactura||"") : "");
+  const [descuento, setDescuento] = React.useState(base ? (base.descuento!==undefined && base.descuento!=="" ? String(base.descuento) : "") : "");
+  function guardar() {
+    if (!nombre.trim()) { alert("El nombre del cliente es obligatorio."); return; }
+    onGuardar({
+      id: editando ? base.id : undefined,
+      nombre: nombre.trim(),
+      telefono: telefono.trim(),
+      rfc: rfc.trim().toUpperCase(),
+      direccion: direccion.trim(),
+      cp: cp.trim(),
+      regimen: regimen,
+      usoFactura: usoFactura,
+      descuento: parseFloat(descuento) || 0
+    });
+    onClose();
+  }
+  return (
+    <Modal title={editando ? "Editar cliente" : "Nuevo cliente"} onClose={onClose}>
+      <Inp label="Nombre *" value={nombre} onChange={function(e){ setNombre(e.target.value); }}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <Inp label="Teléfono" value={telefono} onChange={function(e){ setTelefono(e.target.value); }} type="tel"/>
+        <Inp label="Descuento (%)" value={descuento} onChange={function(e){ setDescuento(e.target.value); }} type="number"/>
+      </div>
+      <div style={{borderTop:"1px solid "+T.border,margin:"6px 0 12px",paddingTop:10}}>
+        <div style={{fontFamily:FS,fontSize:11,fontWeight:700,color:T.textFade,marginBottom:8,letterSpacing:".04em"}}>DATOS DE FACTURACIÓN (opcionales)</div>
+        <Inp label="RFC" value={rfc} onChange={function(e){ setRfc(e.target.value); }}/>
+        <Inp label="Dirección" value={direccion} onChange={function(e){ setDireccion(e.target.value); }}/>
+        <Inp label="Código postal" value={cp} onChange={function(e){ setCp(e.target.value); }}/>
+        <Sel label="Régimen fiscal" value={regimen} onChange={function(e){ setRegimen(e.target.value); }}>
+          {REGIMENES.map(function(r){ return <option key={r} value={r}>{r || "— Seleccionar —"}</option>; })}
+        </Sel>
+        <Sel label="Uso de factura (CFDI)" value={usoFactura} onChange={function(e){ setUsoFactura(e.target.value); }}>
+          {USOS_CFDI.map(function(u){ return <option key={u} value={u}>{u || "— Seleccionar —"}</option>; })}
+        </Sel>
+      </div>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+        <Btn variant="ghost" onClick={onClose}>Cancelar</Btn>
+        <Btn onClick={guardar}>{editando ? "Guardar cambios" : "Crear cliente"}</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 function KPI({icon, label, value, color, accent}) {
   const c = color || T.text;
   const border = accent ? "2px solid "+c+"30" : "1px solid "+T.border;
@@ -856,7 +960,7 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
 }
 
 // ── COTIZADOR ─────────────────────────────────────────────────
-function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, setNextFolioQ, onPedidoCreado, onCotizacionCreada, setCotizadorDirty, stock, cotizacionAEditar, onLimpiarEdicion, setCotizaciones, pedidoAEditar, onLimpiarEdicionPedido, setPedidos}) {
+function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, setNextFolioQ, onPedidoCreado, onCotizacionCreada, setCotizadorDirty, stock, cotizacionAEditar, onLimpiarEdicion, setCotizaciones, pedidoAEditar, onLimpiarEdicionPedido, setPedidos, clientes, setClientes}) {
   const [alto, setAlto] = useState("");
   const [ancho, setAncho] = useState("");
   const [cat, setCat] = useState("impresion");
@@ -876,6 +980,24 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   const [descCot, setDescCot] = useState("");
   const [editandoFolio, setEditandoFolio] = useState(null); // folio que estamos editando
   const [editandoPedido, setEditandoPedido] = useState(null); // pedido original que estamos editando
+  const [modalCliente, setModalCliente] = useState(false); // alta rápida de cliente desde el constructor
+
+  // Al elegir un cliente guardado en la cotización: llena nombre, tel y descuento sugerido
+  function seleccionarClienteCot(c) {
+    setCliCot(c.nombre || "");
+    setTelCot(c.telefono || "");
+    if ((parseFloat(c.descuento)||0) > 0) setDescCot(String(parseFloat(c.descuento)));
+  }
+  // Guardar cliente nuevo desde el constructor y seleccionarlo de una vez
+  function guardarClienteNuevo(cli) {
+    const nuevo = Object.assign({}, cli, {id: cli.id || ("cli_" + Date.now() + "_" + Math.random().toString(36).slice(2,6))});
+    if (cli.id) {
+      setClientes(function(prev){ return prev.map(function(c){ return c.id === cli.id ? Object.assign({},c,nuevo) : c; }); });
+    } else {
+      setClientes(function(prev){ return prev.concat([nuevo]); });
+    }
+    seleccionarClienteCot(nuevo);
+  }
 
   // Cargar cotización para edición
   React.useEffect(function() {
@@ -1384,7 +1506,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
           )}
         </Card>
       </div>
-      {modalNota && <ModalNota items={todosItems} productos={productosMeta} stock={stock} pedidoBase={editandoPedido} onClose={() => setModalNota(false)} onGuardar={p => {
+      {modalNota && <ModalNota items={todosItems} productos={productosMeta} stock={stock} pedidoBase={editandoPedido} clientes={clientes} setClientes={setClientes} onClose={() => setModalNota(false)} onGuardar={p => {
         if (editandoPedido && setPedidos) {
           const orig = editandoPedido;
           setPedidos(function(prev){
@@ -1410,7 +1532,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
       }} nextFolio={editandoPedido ? editandoPedido.folio : nextFolio}/>}
       {modalCot && (
         <Modal title={"Cotizacion C-"+nextFolioQ} onClose={() => setModalCot(false)}>
-          <Inp label="Cliente *" value={cliCot} onChange={e => setCliCot(e.target.value)}/>
+          <ClienteField label="Cliente *" nombre={cliCot} onNombre={setCliCot} onSelect={seleccionarClienteCot} onNuevo={() => setModalCliente(true)} clientes={clientes}/>
           <Inp label="Telefono" value={telCot} onChange={e => setTelCot(e.target.value)} type="tel"/>
           <Inp label="Valida hasta" value={valCot} onChange={e => setValCot(e.target.value)} type="date"/>
           <Inp label="Descuento (%)" value={descCot} onChange={e => setDescCot(e.target.value)} type="number"/>
@@ -1437,11 +1559,14 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
           </div>
         </Modal>
       )}
+      {modalCliente && (
+        <ModalCliente onClose={() => setModalCliente(false)} onGuardar={guardarClienteNuevo}/>
+      )}
     </div>
   );
 }
 
-function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, generarPDF, pedidoBase}) {
+function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, generarPDF, pedidoBase, clientes, setClientes}) {
   const editando = !!pedidoBase;
   const [cliente, setCli] = useState(editando ? (pedidoBase.cliente||"") : "");
   const [tel, setTel] = useState(editando ? (pedidoBase.tel||"") : "");
@@ -1450,6 +1575,20 @@ function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, gene
   const [metodo, setMet] = useState(editando ? (pedidoBase.metodoPago||"Efectivo") : "Efectivo");
   const [nota, setNota] = useState(editando ? (pedidoBase.nota||"") : "");
   const [descPct, setDescPct] = useState(editando ? (pedidoBase.descuentoPct ? String(pedidoBase.descuentoPct) : "") : "");
+  const [modalCliente, setModalCliente] = useState(false);
+  function seleccionarCliente(c) {
+    setCli(c.nombre || "");
+    setTel(c.telefono || "");
+    if ((parseFloat(c.descuento)||0) > 0) setDescPct(String(parseFloat(c.descuento)));
+  }
+  function guardarClienteNuevo(cli) {
+    const nuevo = Object.assign({}, cli, {id: cli.id || ("cli_" + Date.now() + "_" + Math.random().toString(36).slice(2,6))});
+    if (setClientes) {
+      if (cli.id) setClientes(function(prev){ return prev.map(function(c){ return c.id === cli.id ? Object.assign({},c,nuevo) : c; }); });
+      else setClientes(function(prev){ return prev.concat([nuevo]); });
+    }
+    seleccionarCliente(nuevo);
+  }
   const pedidoSim = {items: items, productos: productos, descuentoPct: parseFloat(descPct)||0};
   const sub = (productos && productos.length > 0) ? 
     productos.reduce(function(s,prod){
@@ -1469,6 +1608,7 @@ function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, gene
     onClose();
   }
   return (
+    <React.Fragment>
     <Modal title={(editando?"Editar #":"Nota #")+nextFolio} onClose={onClose} wide={true}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
         <div>
@@ -1496,7 +1636,7 @@ function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, gene
             )}
             <div style={{borderTop:"1px solid "+T.border,marginTop:8,paddingTop:8,display:"flex",justifyContent:"space-between"}}><span style={{fontFamily:FONT,fontWeight:700}}>Total</span><span style={{color:T.amber,fontWeight:700,fontSize:16,fontFamily:FONT}}>{fmt(sub)}</span></div>
           </div>
-          <Inp label="Cliente *" value={cliente} onChange={e => setCli(e.target.value)}/>
+          <ClienteField label="Cliente *" nombre={cliente} onNombre={setCli} onSelect={seleccionarCliente} onNuevo={() => setModalCliente(true)} clientes={clientes}/>
           <Inp label="Telefono" value={tel} onChange={e => setTel(e.target.value)} type="tel"/>
           <Inp label="Fecha de entrega *" value={fechaEnt} onChange={e => setFE(e.target.value)} type="date"/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
@@ -1525,6 +1665,8 @@ function ModalNota({items, productos, onClose, onGuardar, nextFolio, stock, gene
         <Btn onClick={guardar} disabled={!cliente || !fechaEnt}>{editando?"Actualizar #"+nextFolio:"Guardar #"+nextFolio}</Btn>
       </div>
     </Modal>
+    {modalCliente && <ModalCliente onClose={() => setModalCliente(false)} onGuardar={guardarClienteNuevo}/>}
+    </React.Fragment>
   );
 }
 
@@ -5166,6 +5308,101 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
 }
 
 // ── APP PRINCIPAL ─────────────────────────────────────────────
+function TabClientes({clientes, setClientes, pedidos}) {
+  const [busqueda, setBusqueda] = React.useState("");
+  const [modal, setModal] = React.useState(null); // null | {} (nuevo) | cliente (editar)
+  const q = busqueda.toLowerCase().trim();
+  const lista = (clientes||[]).filter(function(c){
+    if (!q) return true;
+    return (c.nombre||"").toLowerCase().indexOf(q) >= 0
+      || (c.telefono||"").toLowerCase().indexOf(q) >= 0
+      || (c.rfc||"").toLowerCase().indexOf(q) >= 0;
+  }).sort(function(a,b){ return (a.nombre||"").localeCompare(b.nombre||""); });
+
+  // Conteo de pedidos por cliente (por nombre, informativo)
+  function pedidosDe(nombre) {
+    const n = (nombre||"").toLowerCase().trim();
+    if (!n) return 0;
+    return (pedidos||[]).filter(function(p){ return (p.cliente||"").toLowerCase().trim() === n; }).length;
+  }
+
+  function guardarCliente(cli) {
+    if (cli.id) {
+      setClientes(function(prev){ return prev.map(function(c){ return c.id === cli.id ? Object.assign({}, c, cli) : c; }); });
+    } else {
+      const nuevo = Object.assign({}, cli, {id: "cli_" + Date.now() + "_" + Math.random().toString(36).slice(2,6)});
+      setClientes(function(prev){ return prev.concat([nuevo]); });
+    }
+  }
+  function eliminarCliente(id) {
+    if (!window.confirm("¿Eliminar este cliente? No afecta pedidos ya guardados.")) return;
+    setClientes(function(prev){ return prev.filter(function(c){ return c.id !== id; }); });
+  }
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:16}}>
+        <div>
+          <h1 style={{margin:0,fontSize:22,fontFamily:FONT,color:T.text}}>Clientes</h1>
+          <div style={{fontSize:12,color:T.textFade,fontFamily:FS,marginTop:2}}>{(clientes||[]).length} clientes registrados</div>
+        </div>
+        <Btn onClick={function(){ setModal({}); }}>+ Nuevo cliente</Btn>
+      </div>
+
+      <input
+        value={busqueda}
+        onChange={function(e){ setBusqueda(e.target.value); }}
+        placeholder="Buscar por nombre, teléfono o RFC…"
+        style={{width:"100%",background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:"9px 13px",color:T.text,fontFamily:FS,fontSize:13,outline:"none",boxSizing:"border-box",marginBottom:14}}
+      />
+
+      {lista.length === 0 ? (
+        <div style={{textAlign:"center",padding:"40px 20px",color:T.textFade,fontFamily:FS,fontSize:14}}>
+          {(clientes||[]).length === 0 ? "Aún no hay clientes. Crea el primero con “+ Nuevo cliente”." : "Sin coincidencias para tu búsqueda."}
+        </div>
+      ) : (
+        <div style={{display:"grid",gap:10}}>
+          {lista.map(function(c){
+            const np = pedidosDe(c.nombre);
+            return (
+              <div key={c.id} style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:10,padding:"13px 15px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                      <span style={{fontFamily:FONT,fontSize:15,fontWeight:700,color:T.text}}>{c.nombre}</span>
+                      {(parseFloat(c.descuento)||0) > 0 && <span style={{background:T.blue+"18",color:T.blue,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700,fontFamily:FS}}>{parseFloat(c.descuento)}% desc.</span>}
+                      {np > 0 && <span style={{background:T.green+"18",color:T.green,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:600,fontFamily:FS}}>{np} pedido{np>1?"s":""}</span>}
+                    </div>
+                    <div style={{fontFamily:FS,fontSize:12,color:T.textSub,marginTop:4,lineHeight:1.6}}>
+                      {c.telefono && <span style={{marginRight:14}}>📞 {c.telefono}</span>}
+                      {c.rfc && <span style={{marginRight:14}}>RFC: {c.rfc}</span>}
+                      {c.cp && <span style={{marginRight:14}}>CP: {c.cp}</span>}
+                      {c.direccion && <div style={{color:T.textFade,marginTop:2}}>{c.direccion}</div>}
+                      {(c.regimen || c.usoFactura) && <div style={{color:T.textFade,marginTop:2,fontSize:11}}>{c.regimen}{c.regimen&&c.usoFactura?" · ":""}{c.usoFactura}</div>}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                    <button onClick={function(){ setModal(c); }} title="Editar" style={{background:T.bg,border:"1px solid "+T.border,borderRadius:6,padding:"6px 10px",cursor:"pointer",fontSize:12,color:T.text,fontFamily:FS}}>Editar</button>
+                    <button onClick={function(){ eliminarCliente(c.id); }} title="Eliminar" style={{background:"none",border:"1px solid "+T.border,borderRadius:6,padding:"6px 9px",cursor:"pointer",fontSize:13,color:T.red}}>🗑</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {modal !== null && (
+        <ModalCliente
+          base={modal.id ? modal : null}
+          onClose={function(){ setModal(null); }}
+          onGuardar={guardarCliente}
+        />
+      )}
+    </div>
+  );
+}
+
 const TABS = [
   {id:"dashboard",label:"Dashboard",icon:"📊",color:"#1565C0",desc:"KPIs y resumen general"},
   {id:"cotizador",label:"Nuevo Pedido",icon:"🧾",color:"#6A1B9A",desc:"Crear pedido o cotización: calculadora + stock"},
@@ -5173,6 +5410,7 @@ const TABS = [
   {id:"pedidos",label:"Pedidos",icon:"📦",color:"#E65100",desc:"Captura y gestión de notas de venta"},
   {id:"flujo",label:"Flujo Trabajo",icon:"🛠️",color:"#558B2F",desc:"Carpintería, impresión y detallado"},
   {id:"cxc",label:"Cuentas por Cobrar",icon:"💰",color:"#C62828",desc:"Saldos pendientes de cobro"},
+  {id:"clientes",label:"Clientes",icon:"👥",color:"#00838F",desc:"Base de datos de clientes y datos de factura"},
   {id:"pos",label:"POS",icon:"🛒",color:"#00695C",desc:"Punto de venta rápido"},
   {id:"notaspos",label:"Notas POS",icon:"🧾",color:"#00838F",desc:"Historial y detalle de ventas POS"},
   {id:"corte",label:"Corte del día",icon:"📈",color:"#4527A0",desc:"Resumen y corte de caja"},
@@ -5320,6 +5558,7 @@ function App() {
   }
   const [costos, setCostos] = useState(COSTOS0);
   const [gastos, setGastos] = useState(GASTOS0);
+  const [clientes, setClientes] = useState([]);
   const [nextFolioBase, setNextFolioBase] = useState(1590);
   const [nextFolioQ, setNextFolioQ] = useState(1);
   // nextFolio siempre = max(pedidos.folio, ventas.folio) + 1, garantiza único globalmente
@@ -5389,6 +5628,7 @@ function App() {
         if (data.ventas_pos && data.ventas_pos.length > 0) setVentasPOS(data.ventas_pos.map(function(v){ return Object.assign({},v,{items:parsearJSON(v.items)}); }));
         if (data.costos && data.costos.length > 0) setCostos(asegurarIds(data.costos, 'c'));
         if (data.gastos && data.gastos.length > 0) setGastos(asegurarIds(data.gastos, 'g'));
+        if (data.clientes && data.clientes.length > 0) setClientes(asegurarIds(data.clientes, 'cli'));
         if (data.stock && data.stock.length > 0) setStock(data.stock);
         if (data.insumos && data.insumos.length > 0) setInsumos(data.insumos);
         // Solo sobreescribir molduras si Sheets tiene MAS o IGUAL que las locales (preserva carga inicial del HTML)
@@ -5481,6 +5721,7 @@ function App() {
         ventas_pos: ventasPOS,
         costos: costos,
         gastos: gastos,
+        clientes: clientes,
         stock: stock,
         insumos: insumos,
         molduras: molduras,
@@ -5504,7 +5745,7 @@ function App() {
         setGuardadoAt("\u26a0\ufe0f " + (err && err.message ? err.message.substring(0,40) : "Error de red"));
       });
     }, 3000);
-  }, [pedidos, cotizaciones, ventasPOS, costos, gastos, stock, insumos, molduras, temas]);
+  }, [pedidos, cotizaciones, ventasPOS, costos, gastos, clientes, stock, insumos, molduras, temas]);
 
   function agregarPedido(p) { setPedidos(function(ps) { return ps.concat([Object.assign({},p,{id:uid(),fecha:HOY})]); }); }
   function agregarCot(c) { setCotizaciones(function(cs) { return cs.concat([Object.assign({},c,{id:uid()})]); }); }
@@ -5617,11 +5858,12 @@ function App() {
           </div>
         )}
         {tab==="dashboard" && <ErrorBoundary><TabDashboard pedidos={pedidos} cotizaciones={cotizaciones} costos={costos} gastos={gastos} stock={stock} ventasPOS={ventasPOS}/></ErrorBoundary>}
-        {tab==="cotizador" && <ErrorBoundary><TabCotizador insumos={insumos} molduras={molduras} nextFolio={nextFolio} setNextFolio={setNextFolio} nextFolioQ={nextFolioQ} setNextFolioQ={setNextFolioQ} onPedidoCreado={agregarPedido} onCotizacionCreada={agregarCot} setCotizadorDirty={setCotizadorDirty} stock={stock} cotizacionAEditar={cotizacionAEditar} onLimpiarEdicion={() => setCotizacionAEditar(null)} setCotizaciones={setCotizaciones} pedidoAEditar={pedidoAEditar} onLimpiarEdicionPedido={() => setPedidoAEditar(null)} setPedidos={setPedidos}/></ErrorBoundary>}
+        {tab==="cotizador" && <ErrorBoundary><TabCotizador insumos={insumos} molduras={molduras} nextFolio={nextFolio} setNextFolio={setNextFolio} nextFolioQ={nextFolioQ} setNextFolioQ={setNextFolioQ} onPedidoCreado={agregarPedido} onCotizacionCreada={agregarCot} setCotizadorDirty={setCotizadorDirty} stock={stock} cotizacionAEditar={cotizacionAEditar} onLimpiarEdicion={() => setCotizacionAEditar(null)} setCotizaciones={setCotizaciones} pedidoAEditar={pedidoAEditar} onLimpiarEdicionPedido={() => setPedidoAEditar(null)} setPedidos={setPedidos} clientes={clientes} setClientes={setClientes}/></ErrorBoundary>}
         {tab==="cotizaciones" && <ErrorBoundary><TabCotizaciones cotizaciones={cotizaciones} setCotizaciones={setCotizaciones} onConvertir={convertirCot} nextFolio={nextFolio} onModificar={(c) => { setCotizacionAEditar(c); setTab("cotizador"); }}/></ErrorBoundary>}
         {tab==="pedidos" && <ErrorBoundary><TabPedidos pedidos={pedidos} setPedidos={setPedidos} nextFolio={nextFolio} setNextFolio={setNextFolio} stock={stock} onNuevoPedido={() => setTab("cotizador")} onEditarConstructor={(p) => { setPedidoAEditar(p); setTab("cotizador"); }}/></ErrorBoundary>}
         {tab==="flujo" && <ErrorBoundary><TabFlujo pedidos={pedidos} setPedidos={setPedidos} molduras={molduras} insumos={insumos} stock={stock}/></ErrorBoundary>}
         {tab==="cxc" && <ErrorBoundary><TabCXC pedidos={pedidos} setPedidos={setPedidos}/></ErrorBoundary>}
+        {tab==="clientes" && <ErrorBoundary><TabClientes clientes={clientes} setClientes={setClientes} pedidos={pedidos}/></ErrorBoundary>}
         {tab==="pos" && <ErrorBoundary><TabPOS stock={stock} setStock={setStock} nextFolio={nextFolio} setNextFolio={setNextFolio} onVentaCreada={agregarVentaPOS}/></ErrorBoundary>}
         {tab==="notaspos" && <ErrorBoundary><TabNotasPOS ventasPOS={ventasPOS}/></ErrorBoundary>}
         {tab==="corte" && <ErrorBoundary><TabCorte pedidos={pedidos} ventasPOS={ventasPOS} stock={stock}/></ErrorBoundary>}
