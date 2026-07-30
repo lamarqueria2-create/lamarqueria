@@ -158,6 +158,7 @@ function normalizarPedido(p) {
   return Object.assign({}, p, {
     items: parsearJSON(p.items),
     productos: prodsConImg,
+    tel: p.tel != null ? String(p.tel) : "",
     tareas: (p.tareas && typeof p.tareas === "string") ? (() => { try { return JSON.parse(p.tareas); } catch(e) { return {}; } })() : (p.tareas || {})
   });
 }
@@ -5485,7 +5486,7 @@ function TabClientes({clientes, setClientes, pedidos}) {
   const lista = (clientes||[]).filter(function(c){
     if (!q) return true;
     return (c.nombre||"").toLowerCase().indexOf(q) >= 0
-      || (c.telefono||"").toLowerCase().indexOf(q) >= 0
+      || String(c.telefono||"").toLowerCase().indexOf(q) >= 0
       || (c.rfc||"").toLowerCase().indexOf(q) >= 0;
   }).sort(function(a,b){ return (a.nombre||"").localeCompare(b.nombre||""); });
 
@@ -5832,7 +5833,18 @@ function App() {
         if (data.ventas_pos && data.ventas_pos.length > 0) setVentasPOS(data.ventas_pos.map(function(v){ return Object.assign({},v,{items:parsearJSON(v.items)}); }));
         if (data.costos && data.costos.length > 0) setCostos(asegurarIdsUnicos(data.costos, 'c'));
         if (data.gastos && data.gastos.length > 0) setGastos(asegurarIdsUnicos(data.gastos, 'g'));
-        if (data.clientes && data.clientes.length > 0) setClientes(asegurarIds(data.clientes, 'cli'));
+        if (data.clientes && data.clientes.length > 0) {
+          const clientesLimpios = data.clientes.map(function(c){
+            // Sheets puede entregar el teléfono como número si la celda tiene
+            // formato numérico; forzamos string aquí para que .toLowerCase()
+            // y demás métodos de texto nunca truenen en ningún lado de la app.
+            return Object.assign({}, c, {
+              telefono: c.telefono != null ? String(c.telefono) : "",
+              rfc: c.rfc != null ? String(c.rfc) : ""
+            });
+          });
+          setClientes(asegurarIds(clientesLimpios, 'cli'));
+        }
         if (data.categorias_registro && data.categorias_registro.length > 0) {
           const todas = asegurarIds(data.categorias_registro, 'cat');
           const cc = todas.filter(function(c){ return (c.tipo||"") === "costo"; });
