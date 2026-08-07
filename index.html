@@ -5131,7 +5131,195 @@ function todasTareasCompletas(pedido, molduras, insumos, stock) {
   return all.every(function(t){ return done[t.id] === true; });
 }
 
+// Extrae alto/ancho (cm) de la descripción del item o, si no está ahí,
+// del título del producto (formato "Cuadro 50x60cm" o "Nombre 50x60cm").
+function extraerMedidas(item, metaTitulo) {
+  const fuente = (item && item.descripcion) || "";
+  let m = fuente.match(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*cm/i);
+  if (!m && metaTitulo) m = metaTitulo.match(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*cm/i);
+  if (!m) return null;
+  return { alto: parseFloat(m[1]), ancho: parseFloat(m[2]) };
+}
+
+// Agrupa las tareas pendientes/hechas de todos los pedidos en producción
+// por MODELO exacto de material (mismo nombre = mismo modelo), dentro de
+// cada etapa (carpintería/impresión/detallado). Para carpintería (molduras)
+// calcula los metros lineales necesarios (misma fórmula que el cotizador:
+// perímetro + desperdicio*2) y cuántas tiras de 2.85m se necesitan.
+function agruparPorMaterial(resumenPedidos, molduras) {
+  const stages = ["carpinteria","impresion","detallado"];
+  const crudo = {carpinteria:{}, impresion:{}, detallado:{}};
+
+  resumenPedidos.forEach(function(r) {
+    const pedido = r.pedido;
+    const done = pedido.tareas || {};
+    const productosMeta = pedido.productos || [];
+    const dias = diasParaEntrega(pedido.fechaEntrega);
+    stages.forEach(function(sid) {
+      (r.tareas[sid] || []).forEach(function(t) {
+        const item = t.item;
+        const nombre = ((item && item.nombre) || "Sin nombre").trim();
+        const key = nombre.toLowerCase();
+        if (!crudo[sid][key]) crudo[sid][key] = { nombre: nombre, piezas: [] };
+        const meta = productosMeta.find(function(m){ return m.id === t.productoId; });
+        const medObj = extraerMedidas(item, meta ? meta.titulo : null);
+        crudo[sid][key].piezas.push({
+          tareaId: t.id,
+          pedidoId: pedido.id,
+          folio: pedido.folio,
+          cliente: pedido.cliente,
+          dias: dias,
+          cantidad: t.cantidad || 1,
+          medida: medObj ? (medObj.alto + "x" + medObj.ancho + "cm") : (item.descripcion || ""),
+          altoCm: medObj ? medObj.alto : null,
+          anchoCm: medObj ? medObj.ancho : null,
+          done: !!done[t.id]
+        });
+      });
+    });
+  });
+
+  function desperdicioDe(nombre) {
+    const n = (nombre || "").toLowerCase().trim();
+    const mol = (molduras || []).find(function(m){ return (m.nombre || "").toLowerCase().trim() === n; });
+    return mol ? (parseFloat(mol.desperdicio) || 0) : 0;
+  }
+
+  const out = { carpinteria: [], impresion: [], detallado: [] };
+
+  Object.keys(crudo.carpinteria).forEach(function(key) {
+    const g = crudo.carpinteria[key];
+    const desp = desperdicioDe(g.nombre);
+    let totalMl = 0;
+    g.piezas.forEach(function(p) {
+      if (p.done || p.altoCm == null || p.anchoCm == null) return;
+      const ml = (2*(p.altoCm + p.anchoCm) + desp*2) / 100;
+      totalMl += ml * (p.cantidad || 1);
+    });
+    const tiras = totalMl > 0 ? Math.ceil(totalMl / 2.85) : 0;
+    const sobrante = tiras > 0 ? (tiras*2.85 - totalMl) : 0;
+    out.carpinteria.push({ nombre: g.nombre, piezas: g.piezas, totalMl: totalMl, tiras: tiras, sobrante: sobrante });
+  });
+
+  ["impresion","detallado"].forEach(function(sid) {
+    Object.keys(crudo[sid]).forEach(function(key) {
+      const g = crudo[sid][key];
+      let totalM2 = 0;
+      g.piezas.forEach(function(p) {
+        if (p.done || p.altoCm == null || p.anchoCm == null) return;
+        totalM2 += (p.altoCm * p.anchoCm / 10000) * (p.cantidad || 1);
+      });
+      out[sid].push({ nombre: g.nombre, piezas: g.piezas, totalM2: totalM2 });
+    });
+  });
+
+  function minDias(piezas) {
+    const pend = piezas.filter(function(p){ return !p.done; }).map(function(p){ return p.dias == null ? 9999 : p.dias; });
+    return pend.length ? Math.min.apply(null, pend) : 9999;
+  }
+  stages.forEach(function(sid) {
+    out[sid].sort(function(a,b){
+      const da = minDias(a.piezas), db = minDias(b.piezas);
+      if (da !== db) return da - db;
+      return a.nombre.localeCompare(b.nombre);
+    });
+    out[sid].forEach(function(g){
+      g.piezas.sort(function(a,b){
+        if (a.done !== b.done) return a.done ? 1 : -1;
+        const da = a.dias==null?9999:a.dias, db = b.dias==null?9999:b.dias;
+        return da - db;
+      });
+    });
+  });
+
+  return out;
+}
+
+// Vista agrupada por material/modelo (en vez de por pedido). Reutiliza
+// exactamente las mismas tareas (mismos ids) que la vista por pedido, así
+// que marcar una casilla aquí también la marca allá, y viceversa.
+function VistaPorMaterial({resumenPedidos, molduras, toggleTarea}) {
+  const datos = agruparPorMaterial(resumenPedidos, molduras);
+  const stageInfo = {
+    carpinteria: {label:"Carpintería", color:"#8B6914", bg:"#FFF8E0", border:"#E0C080"},
+    impresion:   {label:"Impresión",   color:"#C8860A", bg:"#FFF3E0", border:"#F0B060"},
+    detallado:   {label:"Detallado",   color:"#6A1B9A", bg:"#F3E5F5", border:"#C090D0"}
+  };
+  const stagesOrder = ["carpinteria","impresion","detallado"];
+  const hayAlgo = stagesOrder.some(function(sid){ return datos[sid].length > 0; });
+
+  if (!hayAlgo) {
+    return (
+      <Card style={{textAlign:"center",padding:"50px 20px"}}>
+        <div style={{color:T.textFade,fontSize:14,fontFamily:FS}}>No hay materiales pendientes por agrupar.</div>
+      </Card>
+    );
+  }
+
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:14,alignItems:"start"}}>
+      {stagesOrder.map(function(sid) {
+        const si = stageInfo[sid];
+        const grupos = datos[sid];
+        if (grupos.length === 0) return null;
+        return (
+          <div key={sid} style={{background:si.bg,border:"1px solid "+si.border,borderRadius:11,padding:"12px 10px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12,paddingBottom:9,borderBottom:"1px solid "+si.border}}>
+              <div style={{width:10,height:10,borderRadius:"50%",background:si.color}}/>
+              <div style={{fontFamily:FONT,fontWeight:700,fontSize:14,color:si.color,flex:1}}>{si.label}</div>
+              <div style={{background:si.color,color:"#fff",borderRadius:10,padding:"1px 8px",fontSize:10,fontWeight:700,fontFamily:FS}}>{grupos.length} modelo{grupos.length!==1?"s":""}</div>
+            </div>
+            {grupos.map(function(g) {
+              const hechas = g.piezas.filter(function(p){ return p.done; }).length;
+              return (
+                <div key={g.nombre} style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:"9px 11px",marginBottom:9}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <div style={{fontFamily:FONT,fontWeight:700,fontSize:13}}>{g.nombre}</div>
+                    <div style={{fontSize:10,color:T.textFade,fontFamily:FS,fontWeight:600}}>{hechas}/{g.piezas.length}</div>
+                  </div>
+                  {sid === "carpinteria" ? (
+                    g.totalMl > 0 && (
+                      <div style={{background:"#FFF3E0",border:"1px solid #F0B060",borderRadius:5,padding:"5px 7px",marginBottom:7,fontSize:11,fontFamily:FS}}>
+                        <div style={{color:"#8B6914",fontWeight:700}}>{g.totalMl.toFixed(2)} ml necesarios</div>
+                        <div style={{color:T.textFade,fontSize:10,marginTop:1}}>≈ {g.tiras} tira{g.tiras!==1?"s":""} de 2.85m{g.sobrante>0.01 ? (" · sobran "+g.sobrante.toFixed(2)+"m") : ""}</div>
+                      </div>
+                    )
+                  ) : (
+                    g.totalM2 > 0 && (
+                      <div style={{background:"#F3E5F5",border:"1px solid #C090D0",borderRadius:5,padding:"5px 7px",marginBottom:7,fontSize:11,fontFamily:FS}}>
+                        <div style={{color:"#6A1B9A",fontWeight:700}}>{g.totalM2.toFixed(2)} m² necesarios</div>
+                      </div>
+                    )
+                  )}
+                  {g.piezas.map(function(p) {
+                    const colorDia = p.dias!=null ? colorDiasEntrega(p.dias) : null;
+                    const textoDia = p.dias!=null ? textoDiasEntrega(p.dias) : null;
+                    return (
+                      <label key={p.tareaId} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"4px 2px",cursor:"pointer",opacity:p.done?0.55:1}}>
+                        <input type="checkbox" checked={p.done} onChange={function(){ toggleTarea(p.pedidoId, p.tareaId); }} style={{width:16,height:16,marginTop:1,cursor:"pointer",accentColor:si.color,flexShrink:0}}/>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+                            {(p.cantidad||1) > 1 && <span style={{background:si.color,color:"#fff",borderRadius:4,padding:"0px 5px",fontSize:10,fontWeight:700,fontFamily:FONT}}>{p.cantidad}×</span>}
+                            <span style={{fontFamily:FONT,fontWeight:700,fontSize:12,textDecoration:p.done?"line-through":"none"}}>#{p.folio}</span>
+                            {colorDia && !p.done && <span style={{background:colorDia,color:"#fff",borderRadius:4,padding:"0px 5px",fontSize:9,fontWeight:700,fontFamily:FS}}>{textoDia}</span>}
+                          </div>
+                          <div style={{fontSize:11,color:T.textSub,fontFamily:FS,textDecoration:p.done?"line-through":"none"}}>{p.cliente}{p.medida ? " · "+p.medida : ""}</div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
+  const [vistaFlujo, setVistaFlujo] = useState("pedido"); // "pedido" | "material"
   const [modalTareasId, setModalTareasId] = useState(null); // id del pedido con modal abierto
   const enProduccion = pedidos.filter(function(p){ return p.estado === "Produccion"; });
   const stages = [
@@ -5202,12 +5390,16 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
 
   return (
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
         <div>
           <div style={{fontFamily:FONT,fontSize:19,fontWeight:700}}>Flujo de Trabajo</div>
           <div style={{color:T.textFade,fontSize:11,fontFamily:FS,marginTop:2}}>
             {enProduccion.length} pedido{enProduccion.length!==1?"s":""} en producción · Marca cada tarea al completarla
           </div>
+        </div>
+        <div style={{display:"flex",border:"1px solid "+T.border,borderRadius:7,overflow:"hidden"}}>
+          <button onClick={() => setVistaFlujo("pedido")} style={{background:vistaFlujo==="pedido"?T.bgDark:"transparent",color:vistaFlujo==="pedido"?T.text:T.textFade,border:"none",padding:"6px 14px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:vistaFlujo==="pedido"?700:400}}>Por pedido</button>
+          <button onClick={() => setVistaFlujo("material")} style={{background:vistaFlujo==="material"?T.bgDark:"transparent",color:vistaFlujo==="material"?T.text:T.textFade,border:"none",padding:"6px 14px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:vistaFlujo==="material"?700:400}}>Por material</button>
         </div>
       </div>
 
@@ -5250,8 +5442,10 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
             })}
           </div>
 
-          {/* Columnas por urgencia + imágenes */}
-          {(function(){
+          {/* Columnas por urgencia + imágenes, o vista agrupada por material */}
+          {vistaFlujo === "material" ? (
+            <VistaPorMaterial resumenPedidos={resumenPedidos} molduras={molduras} toggleTarea={toggleTarea} />
+          ) : (function(){
             const stageInfo = {
               carpinteria: {label:"Carpintería", color:"#8B6914"},
               impresion:   {label:"Impresión",   color:"#C8860A"},
