@@ -5175,6 +5175,9 @@ function agruparPorMaterial(resumenPedidos, molduras) {
           dias: dias,
           cantidad: t.cantidad || 1,
           medida: medObj ? (medObj.alto + "x" + medObj.ancho + "cm") : String(item.descripcion != null ? item.descripcion : ""),
+          imagen: meta && meta.imagen ? meta.imagen : null,
+          fileId: meta && meta.fileId ? meta.fileId : null,
+          tituloProd: meta && meta.titulo ? String(meta.titulo) : "",
           altoCm: medObj ? medObj.alto : null,
           anchoCm: medObj ? medObj.ancho : null,
           done: !!done[t.id]
@@ -5303,6 +5306,22 @@ function VistaPorMaterial({resumenPedidos, molduras, toggleTarea}) {
                     return (
                       <label key={p.tareaId} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"4px 2px",cursor:"pointer",opacity:p.done?0.55:1}}>
                         <input type="checkbox" checked={p.done} onChange={function(){ toggleTarea(p.pedidoId, p.tareaId); }} style={{width:16,height:16,marginTop:1,cursor:"pointer",accentColor:si.color,flexShrink:0}}/>
+                        {p.imagen && (
+                          p.fileId ? (
+                            <a
+                              href={"https://drive.google.com/uc?export=download&id="+p.fileId}
+                              download={"pedido_"+p.folio+"_"+(String(p.tituloProd||"img").replace(/[^a-z0-9]/gi,"_"))+".jpg"}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={function(ev){ ev.stopPropagation(); }}
+                              style={{flexShrink:0,lineHeight:0}}
+                            >
+                              <img src={p.imagen} alt="ref" style={{width:42,height:42,objectFit:"cover",borderRadius:5,border:"1px solid "+T.border,background:"#fff",filter:p.done?"grayscale(70%)":"none"}}/>
+                            </a>
+                          ) : (
+                            <img src={p.imagen} alt="ref" style={{width:42,height:42,objectFit:"cover",borderRadius:5,border:"1px solid "+T.border,background:"#fff",flexShrink:0,filter:p.done?"grayscale(70%)":"none"}}/>
+                          )
+                        )}
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
                             {(p.cantidad||1) > 1 && <span style={{background:si.color,color:"#fff",borderRadius:4,padding:"0px 5px",fontSize:10,fontWeight:700,fontFamily:FONT}}>{p.cantidad}×</span>}
