@@ -5280,6 +5280,7 @@ function VistaPorMaterial({resumenPedidos, molduras, toggleTarea}) {
             </div>
             {grupos.map(function(g) {
               const hechas = g.piezas.filter(function(p){ return p.done; }).length;
+              const pendientes = g.piezas.length - hechas;
               return (
                 <div key={g.nombre} style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:"9px 11px",marginBottom:9}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
@@ -5287,24 +5288,28 @@ function VistaPorMaterial({resumenPedidos, molduras, toggleTarea}) {
                     <div style={{fontSize:10,color:T.textFade,fontFamily:FS,fontWeight:600}}>{hechas}/{g.piezas.length}</div>
                   </div>
                   {sid === "carpinteria" ? (
-                    g.totalMl > 0 && (
+                    g.totalMl > 0 ? (
                       <div style={{background:"#FFF3E0",border:"1px solid #F0B060",borderRadius:5,padding:"5px 7px",marginBottom:7,fontSize:11,fontFamily:FS}}>
-                        <div style={{color:"#8B6914",fontWeight:700}}>{g.totalMl.toFixed(2)} ml necesarios</div>
+                        <div style={{color:"#8B6914",fontWeight:700}}>{g.totalMl.toFixed(2)} ml por cortar{pendientes>0 ? (" ("+pendientes+" pza"+(pendientes!==1?"s":"")+")") : ""}</div>
                         <div style={{color:T.textFade,fontSize:10,marginTop:1}}>≈ {g.tiras} tira{g.tiras!==1?"s":""} de 2.85m{g.sobrante>0.01 ? (" · sobran "+g.sobrante.toFixed(2)+"m") : ""}</div>
                       </div>
+                    ) : (
+                      <div style={{background:"#E8F5E9",border:"1px solid #A5D6A7",borderRadius:5,padding:"5px 7px",marginBottom:7,fontSize:11,fontFamily:FS,color:"#2E7D32",fontWeight:700}}>Todo cortado</div>
                     )
                   ) : (
-                    g.totalM2 > 0 && (
+                    g.totalM2 > 0 ? (
                       <div style={{background:"#F3E5F5",border:"1px solid #C090D0",borderRadius:5,padding:"5px 7px",marginBottom:7,fontSize:11,fontFamily:FS}}>
-                        <div style={{color:"#6A1B9A",fontWeight:700}}>{g.totalM2.toFixed(2)} m² necesarios</div>
+                        <div style={{color:"#6A1B9A",fontWeight:700}}>{g.totalM2.toFixed(2)} m² por hacer{pendientes>0 ? (" ("+pendientes+" pza"+(pendientes!==1?"s":"")+")") : ""}</div>
                       </div>
+                    ) : (
+                      <div style={{background:"#E8F5E9",border:"1px solid #A5D6A7",borderRadius:5,padding:"5px 7px",marginBottom:7,fontSize:11,fontFamily:FS,color:"#2E7D32",fontWeight:700}}>Todo hecho</div>
                     )
                   )}
                   {g.piezas.map(function(p) {
                     const colorDia = p.dias!=null ? colorDiasEntrega(p.dias) : null;
                     const textoDia = p.dias!=null ? textoDiasEntrega(p.dias) : null;
                     return (
-                      <label key={p.tareaId} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"4px 2px",cursor:"pointer",opacity:p.done?0.55:1}}>
+                      <label key={p.pedidoId + "|" + p.tareaId} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"4px 2px",cursor:"pointer",opacity:p.done?0.55:1}}>
                         <input type="checkbox" checked={p.done} onChange={function(){ toggleTarea(p.pedidoId, p.tareaId); }} style={{width:16,height:16,marginTop:1,cursor:"pointer",accentColor:si.color,flexShrink:0}}/>
                         {sid === "impresion" && p.imagen && (
                           p.fileId ? (
