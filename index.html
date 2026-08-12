@@ -2224,6 +2224,28 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
     }
     setMF(true);
   }
+  function imprimirPedidoNuevo(item) {
+    // Genera el PDF del pedido recién creado (misma llamada que el botón "Imprimir PDF").
+    // Se ejecuta con un pequeño retraso para no bloquear el guardado en pantalla.
+    try {
+      generarPDF({
+        folio: item.folio,
+        tipo: "nota",
+        cliente: item.cliente,
+        clienteTel: item.tel || "",
+        clienteCorreo: "",
+        fecha: item.fecha || HOY,
+        fechaEntrega: item.fechaEntrega,
+        items: item.items || [],
+        productos: item.productos || [],
+        stock: stock || [],
+        anticipo: parseFloat(item.anticipo) || 0,
+        descuento: parseFloat(item.descuento) || 0,
+        descuentoPct: parseFloat(item.descuentoPct) || 0,
+        iva: false
+      });
+    } catch (e) {}
+  }
   function save() {
     if (!form.cliente) { alert("El cliente es obligatorio"); return; }
     if (!form.fechaEntrega) { alert("La fecha de entrega es obligatoria"); return; }
@@ -2246,8 +2268,10 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
         if (confirmar(opciones)) {
           const pedidosSinDup = pedidos.filter(function(p){return parseInt(p.folio) !== folioFinal;});
           const item = Object.assign({},form,{folio:folioFinal,anticipo:parseFloat(form.anticipo)||0,items:items,productos:productosMeta});
-          setPedidos(pedidosSinDup.concat([Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()})]));
+          const nuevoItemDup = Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()});
+          setPedidos(pedidosSinDup.concat([nuevoItemDup]));
           setNid(n => n+1);
+          setTimeout(function(){ imprimirPedidoNuevo(nuevoItemDup); }, 150);
           setMF(false);
           return;
         } else {
@@ -2298,8 +2322,10 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
         setPedidos(pedidos.concat([Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()})]));
       }
     } else {
-      setPedidos(pedidos.concat([Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()})]));
+      const nuevoItem = Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()});
+      setPedidos(pedidos.concat([nuevoItem]));
       setNid(n => n+1);
+      setTimeout(function(){ imprimirPedidoNuevo(nuevoItem); }, 150);
     }
     setMF(false);
   }
@@ -6377,4 +6403,3 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
 </script>
 </body>
 </html>
-  
