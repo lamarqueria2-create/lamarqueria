@@ -2258,15 +2258,15 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
       return px;
     });
     // Validación de folio único (solo para pedidos NUEVOS)
-    let folioFinal = parseInt(form.folio)||nextFolio;
+    let folioFinal = form.folio || nextFolio;
     if (!editId) {
-      const existente = pedidos.find(function(p){return parseInt(p.folio) === folioFinal;});
+      const existente = pedidos.find(function(p){return String(p.folio) === String(folioFinal);});
       if (existente) {
-        const opciones = "El folio #"+folioFinal+" ya existe (cliente: "+existente.cliente+").\n\n" +
-                         "Aceptar = Eliminar el pedido anterior y usar el folio #"+folioFinal+"\n" +
+        const opciones = "El folio "+folioFinal+" ya existe (cliente: "+existente.cliente+").\n\n" +
+                         "Aceptar = Eliminar el pedido anterior y usar el folio "+folioFinal+"\n" +
                          "Cancelar = Asignar el siguiente folio disponible automáticamente";
         if (confirmar(opciones)) {
-          const pedidosSinDup = pedidos.filter(function(p){return parseInt(p.folio) !== folioFinal;});
+          const pedidosSinDup = pedidos.filter(function(p){return String(p.folio) !== String(folioFinal);});
           const item = Object.assign({},form,{folio:folioFinal,anticipo:parseFloat(form.anticipo)||0,items:items,productos:productosMeta});
           const nuevoItemDup = Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()});
           setPedidos(pedidosSinDup.concat([nuevoItemDup]));
@@ -2275,11 +2275,15 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
           setMF(false);
           return;
         } else {
-          const usados = pedidos.map(function(p){return parseInt(p.folio)||0;});
-          let nuevo = folioFinal + 1;
-          while (usados.indexOf(nuevo) >= 0) nuevo++;
-          folioFinal = nuevo;
-          alert("Se asignará el folio #"+folioFinal);
+          // Extrae prefijo de letra (si lo hay) y número, para reconstruir un folio libre del mismo tipo
+          const m = String(folioFinal).match(/^([A-Za-z]*-?)(\d+)/);
+          const prefijo = m ? m[1] : "";
+          let numero = m ? parseInt(m[2],10) : (parseInt(folioFinal)||0);
+          const usados = pedidos.map(function(p){ return String(p.folio); });
+          let nuevo = numero + 1;
+          while (usados.indexOf(prefijo + nuevo) >= 0) nuevo++;
+          folioFinal = prefijo + nuevo;
+          alert("Se asignará el folio "+folioFinal);
         }
       }
     }
@@ -5995,16 +5999,24 @@ function App() {
       return nuevo;
     };
   }
-  const [nextFolioBase, setNextFolioBase] = useState(1590);
+  const [nextFolioBase, setNextFolioBase] = useState(1590); // legado: solo se usa como respaldo si pedidos llega vacío
   const [nextFolioQ, setNextFolioQ] = useState(1);
-  // nextFolio siempre = max(pedidos.folio, ventas.folio) + 1, garantiza único globalmente
-  const nextFolio = (function(){
-    const folios = pedidos.map(function(p){return parseInt(p.folio)||0;})
-      .concat(ventasPOS.map(function(v){return parseInt(v.folio)||0;}))
-      .filter(function(f){return f>0;});
-    if (!folios.length) return nextFolioBase;
-    return Math.max.apply(null, folios) + 1;
-  })();
+  // Extrae la parte numérica de un folio, ignorando cualquier prefijo de letras (S-, P-, C-, etc.)
+  function folioNum(f) {
+    return parseInt(String(f==null?"":f).replace(/\D/g,"")) || 0;
+  }
+  // Nota de Venta (pedidos): secuencia propia con prefijo "S-".
+  // Continúa desde el folio más alto ya usado en pedidos (viejos sin prefijo o nuevos con "S-").
+  const nextFolioS = "S-" + ((function(){
+    const folios = pedidos.map(function(p){ return folioNum(p.folio); });
+    return (folios.length ? Math.max.apply(null, folios) : (nextFolioBase - 1)) + 1;
+  })());
+  // Nota de POS (ventas de mostrador): secuencia propia con prefijo "P-".
+  // Continúa desde el folio más alto ya usado en ventas POS.
+  const nextFolioP = "P-" + ((function(){
+    const folios = ventasPOS.map(function(v){ return folioNum(v.folio); });
+    return (folios.length ? Math.max.apply(null, folios) : 0) + 1;
+  })());
   function setNextFolio(v) {
     if (typeof v === "function") setNextFolioBase(v); else setNextFolioBase(v);
   }
@@ -6243,7 +6255,7 @@ function App() {
   function aplicarConversion(datos) {
     const c = cotConvertir;
     const nuevo = {
-      id:uid(), folio:nextFolio,
+      id:uid(), folio:nextFolioS,
       cliente:c.cliente, tel:c.tel,
       fechaEntrega:datos.fechaEntrega,
       items:datos.items, productos:datos.productos,
@@ -6292,7 +6304,7 @@ function App() {
             const f = prompt("Corregir fecha (YYYY-MM-DD):", fechaAjuste || HOY_ACTUAL());
             if (f) { setFechaAjuste(f); FECHA_OVERRIDE = f; }
           }}>
-            Folio #{nextFolio} · <u>Ajustar fecha si es necesario</u>
+            Próx. Nota: {nextFolioS} · Próx. POS: {nextFolioP} · <u>Ajustar fecha si es necesario</u>
           </div>
           <div style={{color:"rgba(255,255,255,0.45)",fontSize:10,fontFamily:FS,marginTop:4}}>Jose Ma. Morelos 745 Nte. · Culiacan · <u title="Requiere estar en la cuenta de Google que controla la base de datos">Acct: Google conectada</u></div>
         </div>
@@ -6346,13 +6358,13 @@ function App() {
           </div>
         )}
         {tab==="dashboard" && <ErrorBoundary><TabDashboard pedidos={pedidos} cotizaciones={cotizaciones} costos={costos} gastos={gastos} stock={stock} ventasPOS={ventasPOS}/></ErrorBoundary>}
-        {tab==="cotizador" && <ErrorBoundary><TabCotizador insumos={insumos} molduras={molduras} nextFolio={nextFolio} setNextFolio={setNextFolio} nextFolioQ={nextFolioQ} setNextFolioQ={setNextFolioQ} onPedidoCreado={agregarPedido} onCotizacionCreada={agregarCot} setCotizadorDirty={setCotizadorDirty} stock={stock} cotizacionAEditar={cotizacionAEditar} onLimpiarEdicion={() => setCotizacionAEditar(null)} setCotizaciones={setCotizaciones} pedidoAEditar={pedidoAEditar} onLimpiarEdicionPedido={() => setPedidoAEditar(null)} setPedidos={setPedidos} clientes={clientes} setClientes={setClientes}/></ErrorBoundary>}
-        {tab==="cotizaciones" && <ErrorBoundary><TabCotizaciones cotizaciones={cotizaciones} setCotizaciones={setCotizaciones} onConvertir={convertirCot} nextFolio={nextFolio} onModificar={(c) => { setCotizacionAEditar(c); setTab("cotizador"); }}/></ErrorBoundary>}
-        {tab==="pedidos" && <ErrorBoundary><TabPedidos pedidos={pedidos} setPedidos={setPedidos} nextFolio={nextFolio} setNextFolio={setNextFolio} stock={stock} onNuevoPedido={() => setTab("cotizador")} onEditarConstructor={(p) => { setPedidoAEditar(p); setTab("cotizador"); }}/></ErrorBoundary>}
+        {tab==="cotizador" && <ErrorBoundary><TabCotizador insumos={insumos} molduras={molduras} nextFolio={nextFolioS} setNextFolio={setNextFolio} nextFolioQ={nextFolioQ} setNextFolioQ={setNextFolioQ} onPedidoCreado={agregarPedido} onCotizacionCreada={agregarCot} setCotizadorDirty={setCotizadorDirty} stock={stock} cotizacionAEditar={cotizacionAEditar} onLimpiarEdicion={() => setCotizacionAEditar(null)} setCotizaciones={setCotizaciones} pedidoAEditar={pedidoAEditar} onLimpiarEdicionPedido={() => setPedidoAEditar(null)} setPedidos={setPedidos} clientes={clientes} setClientes={setClientes}/></ErrorBoundary>}
+        {tab==="cotizaciones" && <ErrorBoundary><TabCotizaciones cotizaciones={cotizaciones} setCotizaciones={setCotizaciones} onConvertir={convertirCot} nextFolio={nextFolioS} onModificar={(c) => { setCotizacionAEditar(c); setTab("cotizador"); }}/></ErrorBoundary>}
+        {tab==="pedidos" && <ErrorBoundary><TabPedidos pedidos={pedidos} setPedidos={setPedidos} nextFolio={nextFolioS} setNextFolio={setNextFolio} stock={stock} onNuevoPedido={() => setTab("cotizador")} onEditarConstructor={(p) => { setPedidoAEditar(p); setTab("cotizador"); }}/></ErrorBoundary>}
         {tab==="flujo" && <ErrorBoundary><TabFlujo pedidos={pedidos} setPedidos={setPedidos} molduras={molduras} insumos={insumos} stock={stock}/></ErrorBoundary>}
         {tab==="cxc" && <ErrorBoundary><TabCXC pedidos={pedidos} setPedidos={setPedidos}/></ErrorBoundary>}
         {tab==="clientes" && <ErrorBoundary><TabClientes clientes={clientes} setClientes={setClientes} pedidos={pedidos}/></ErrorBoundary>}
-        {tab==="pos" && <ErrorBoundary><TabPOS stock={stock} setStock={setStock} nextFolio={nextFolio} setNextFolio={setNextFolio} onVentaCreada={agregarVentaPOS}/></ErrorBoundary>}
+        {tab==="pos" && <ErrorBoundary><TabPOS stock={stock} setStock={setStock} nextFolio={nextFolioP} setNextFolio={setNextFolio} onVentaCreada={agregarVentaPOS}/></ErrorBoundary>}
         {tab==="notaspos" && <ErrorBoundary><TabNotasPOS ventasPOS={ventasPOS}/></ErrorBoundary>}
         {tab==="corte" && <ErrorBoundary><TabCorte pedidos={pedidos} ventasPOS={ventasPOS} stock={stock}/></ErrorBoundary>}
         {tab==="inventario" && <ErrorBoundary><TabInventario stock={stock} setStock={setStock}/></ErrorBoundary>}
@@ -6360,7 +6372,7 @@ function App() {
         {tab==="gastos" && <ErrorBoundary><TabRegistros tipo="gasto" registros={gastos} setRegistros={setGastos} categorias={catGastos} onAgregarCategoria={agregarACatalogo(setCatGastos)} proveedores={proveedoresReg} onAgregarProveedor={agregarACatalogo(setProveedoresReg)}/></ErrorBoundary>}
         {tab==="bases" && <ErrorBoundary><TabBases insumos={insumos} setInsumos={setInsumos} molduras={molduras} setMolduras={setMolduras} stock={stock} setStock={setStock} temas={temas} setTemas={setTemas} catCostos={catCostos} setCatCostos={setCatCostos} catGastos={catGastos} setCatGastos={setCatGastos} proveedoresReg={proveedoresReg} setProveedoresReg={setProveedoresReg}/></ErrorBoundary>}
       </div>
-      {cotConvertir && <ModalConvertir cotizacion={cotConvertir} nextFolio={nextFolio} onClose={() => setCotConvertir(null)} onConfirmar={aplicarConversion}/>}
+      {cotConvertir && <ModalConvertir cotizacion={cotConvertir} nextFolio={nextFolioS} onClose={() => setCotConvertir(null)} onConfirmar={aplicarConversion}/>}
     </div>
   );
 }
