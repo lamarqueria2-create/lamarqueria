@@ -1040,6 +1040,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   const [editandoFolio, setEditandoFolio] = useState(null); // folio que estamos editando
   const [editandoPedido, setEditandoPedido] = useState(null); // pedido original que estamos editando
   const [modalCliente, setModalCliente] = useState(false); // alta rápida de cliente desde el constructor
+  const [modalCotGuardada, setModalCotGuardada] = useState(null); // cotizacion recien guardada, para mostrar su detalle
 
   // Al elegir un cliente guardado en la cotización: llena nombre, tel y descuento sugerido
   function seleccionarClienteCot(c) {
@@ -1382,11 +1383,13 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
       setEditandoFolio(null);
     } else {
       const folioCotNueva = nextFolioQ;
-      try {
-        generarPDF({folio:"C-"+folioCotNueva,tipo:"cotizacion",cliente:cliCot,clienteTel:telCot,clienteCorreo:"",fecha:HOY,fechaEntrega:valCot,items:todosItems,productos:productosMeta,stock:stock,anticipo:0,descuento:0,descuentoPct:desCotPct,iva:false});
-      } catch (e) {}
-      onCotizacionCreada({folio:folioCotNueva,cliente:cliCot,tel:telCot,validez:valCot,nota:notaCot,items:todosItems,productos:productosMeta,total:totalConDesc,descuentoPct:desCotPct,estado:"Pendiente",fecha:HOY});
+      const nuevaCotGuardada = {id:"c"+uid(),folio:folioCotNueva,cliente:cliCot,tel:telCot,validez:valCot,nota:notaCot,items:todosItems,productos:productosMeta,total:totalConDesc,descuentoPct:desCotPct,estado:"Pendiente",fecha:HOY};
+      onCotizacionCreada(nuevaCotGuardada);
       setNextFolioQ(f => f+1);
+      // En vez de disparar el PDF automaticamente (window.open puede quedar bloqueado
+      // por el navegador), mostramos el detalle de la cotizacion recien guardada.
+      // Desde ahi "Imprimir PDF" es un clic real del usuario, que nunca se bloquea.
+      setModalCotGuardada(nuevaCotGuardada);
     }
     setModalCot(false);
     setCliCot("");
@@ -1651,7 +1654,76 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
       {modalCliente && (
         <ModalCliente onClose={() => setModalCliente(false)} onGuardar={guardarClienteNuevo}/>
       )}
+      {modalCotGuardada && <ModalCotizacionGuardada cotizacion={modalCotGuardada} onClose={() => setModalCotGuardada(null)} generarPDF={generarPDF}/>}
     </div>
+  );
+}
+
+// ── MODAL COTIZACION GUARDADA (confirmacion tras guardar) ──────
+function ModalCotizacionGuardada({cotizacion, onClose, generarPDF}) {
+  if (!cotizacion) return null;
+  const c = cotizacion;
+  const items = Array.isArray(c.items) ? c.items : [];
+  const productos = Array.isArray(c.productos) ? c.productos : [];
+  let total = 0;
+  const prodIds = new Set(productos.map(function(p){return p.id;}));
+  if (productos.length > 0) {
+    productos.forEach(function(prod){
+      const its = items.filter(function(it){return it.productoId === prod.id;});
+      const sub = its.reduce(function(s,it){return s+(parseFloat(it.precio)||0);},0);
+      total += sub * (parseFloat(prod.cantidad)||1);
+    });
+    const sueltos = items.filter(function(it){return !prodIds.has(it.productoId);});
+    total += sueltos.reduce(function(s,it){return s+(parseFloat(it.precio)||0);},0);
+  } else {
+    total = items.reduce(function(s,i){return s+(parseFloat(i.precio)||0);},0);
+  }
+  let grupos = [];
+  if (productos.length === 0) {
+    if (items.length > 0) grupos = [{id:"default", titulo:"", nota:"", imagen:null, items:items}];
+  } else {
+    grupos = productos.map(function(prod){
+      return {id:prod.id, titulo:prod.titulo||"", nota:prod.nota||"", imagen:prod.imagen||null, items: items.filter(function(it){return it.productoId===prod.id;})};
+    });
+  }
+  const totalFinal = c.total!=null ? c.total : total;
+  return (
+    <Modal title={"Cotización C-"+(c.folio||"")+" — "+(c.cliente||"")} onClose={onClose} wide={true}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+        <div>
+          {[["Cliente",c.cliente||"—"],["Teléfono",c.tel||"—"],["Válida hasta",fmtD(c.validez||c.fechaEntrega)]].map(function(row) {
+            return <div key={row[0]} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid "+T.border,fontSize:13,fontFamily:FS}}><span style={{color:T.textFade}}>{row[0]}</span><span style={{fontWeight:600}}>{row[1]}</span></div>;
+          })}
+          <div style={{marginTop:10}}>
+            {grupos.map(function(grupo) {
+              const subProd = grupo.items.reduce(function(s,i){return s+(parseFloat(i.precio)||0);},0);
+              return (
+                <div key={grupo.id} style={{marginBottom:10,paddingBottom:8,borderBottom:"1px solid "+T.border}}>
+                  {grupo.titulo ? <div style={{fontFamily:FONT,fontSize:12,fontWeight:700,color:T.text,marginBottom:3}}>{grupo.titulo}</div> : null}
+                  {grupo.nota ? <div style={{fontSize:10,color:T.amber,fontFamily:FS,fontStyle:"italic",marginBottom:4,padding:"3px 6px",background:"#FFF8E0",borderRadius:4}}>📝 {grupo.nota}</div> : null}
+                  {grupo.imagen ? <img src={grupo.imagen} alt="" style={{width:"100%",maxHeight:160,objectFit:"contain",borderRadius:6,marginBottom:6,border:"1px solid "+T.border}}/> : null}
+                  {grupo.items.map(function(it,i){
+                    return <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2,fontFamily:FS,paddingLeft:8}}><span style={{color:T.textSub}}>· {it.nombre||""}{it.descripcion?" — "+it.descripcion:""}</span><span style={{color:T.textFade}}>{fmt(parseFloat(it.precio)||0)}</span></div>;
+                  })}
+                  {grupos.length > 1 && <div style={{textAlign:"right",fontSize:11,color:T.amber,fontFamily:FONT,fontWeight:700,marginTop:3}}>{fmt(subProd)}</div>}
+                </div>
+              );
+            })}
+            {grupos.length === 0 && <div style={{color:T.textFade,fontSize:11,fontFamily:FS,padding:"10px 0"}}>Sin productos registrados</div>}
+            <div style={{borderTop:"2px solid "+T.border,marginTop:8,paddingTop:8,display:"flex",justifyContent:"space-between"}}>
+              <span style={{fontFamily:FONT,fontWeight:700}}>Total</span>
+              <span style={{color:T.amber,fontWeight:700,fontSize:18,fontFamily:FONT}}>{fmt(totalFinal)}</span>
+            </div>
+          </div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {c.nota && <div style={{background:T.bgDark,borderRadius:7,padding:"8px 12px",fontSize:11,fontFamily:FS,color:T.textSub,fontStyle:"italic"}}>📝 {c.nota}</div>}
+          <Btn onClick={() => generarPDF({folio:"C-"+c.folio,tipo:"cotizacion",cliente:c.cliente,clienteTel:c.tel||"",clienteCorreo:"",fecha:c.fecha||HOY,fechaEntrega:c.validez||c.fechaEntrega,items:items,productos:productos,stock:[],anticipo:0,descuento:0,descuentoPct:parseFloat(c.descuentoPct)||0,iva:false})} style={{width:"100%"}}>🖨️ Imprimir PDF</Btn>
+          {c.tel && <a href={"https://wa.me/52"+String(c.tel||"").replace(/\D/g,"")+"?text="+encodeURIComponent("Cotización C-"+c.folio+" — La Marqueria\nCliente: "+c.cliente+"\nTotal: "+fmt(totalFinal))} target="_blank" rel="noreferrer" style={{display:"block",background:"#25D366",color:"#fff",borderRadius:7,padding:"10px 0",textAlign:"center",textDecoration:"none",fontWeight:700,fontSize:13,fontFamily:FS}}>WhatsApp</a>}
+          <Btn variant="ghost" onClick={onClose}>Cerrar</Btn>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -2228,27 +2300,12 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
     }
     setMF(true);
   }
-  function imprimirPedidoNuevo(item) {
-    // Genera el PDF del pedido recién creado (misma llamada que el botón "Imprimir PDF").
-    // Se ejecuta con un pequeño retraso para no bloquear el guardado en pantalla.
-    try {
-      generarPDF({
-        folio: item.folio,
-        tipo: "nota",
-        cliente: item.cliente,
-        clienteTel: item.tel || "",
-        clienteCorreo: "",
-        fecha: item.fecha || HOY,
-        fechaEntrega: item.fechaEntrega,
-        items: item.items || [],
-        productos: item.productos || [],
-        stock: stock || [],
-        anticipo: parseFloat(item.anticipo) || 0,
-        descuento: parseFloat(item.descuento) || 0,
-        descuentoPct: parseFloat(item.descuentoPct) || 0,
-        iva: false
-      });
-    } catch (e) {}
+  function mostrarPedidoGuardado(item) {
+    // En vez de intentar abrir el PDF automaticamente (window.open puede ser bloqueado
+    // por el navegador incluso siendo sincrono, si el sitio quedo marcado como bloqueado),
+    // mostramos el modal de detalle del pedido recien guardado. Desde ahi el boton
+    // "Imprimir PDF" es un clic real del usuario, que el navegador nunca bloquea.
+    setMD(normalizarPedido(item));
   }
   function save() {
     if (!form.cliente) { alert("El cliente es obligatorio"); return; }
@@ -2273,7 +2330,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
           const pedidosSinDup = pedidos.filter(function(p){return String(p.folio) !== String(folioFinal);});
           const item = Object.assign({},form,{folio:folioFinal,anticipo:parseFloat(form.anticipo)||0,items:items,productos:productosMeta});
           const nuevoItemDup = Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()});
-          imprimirPedidoNuevo(nuevoItemDup);
+          mostrarPedidoGuardado(nuevoItemDup);
           setPedidos(pedidosSinDup.concat([nuevoItemDup]));
           setNid(n => n+1);
           setMF(false);
@@ -2331,7 +2388,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
       }
     } else {
       const nuevoItem = Object.assign({},item,{id:"p"+uid(),fecha:item.fecha||HOY_ACTUAL()});
-      imprimirPedidoNuevo(nuevoItem);
+      mostrarPedidoGuardado(nuevoItem);
       setPedidos(pedidos.concat([nuevoItem]));
       setNid(n => n+1);
     }
@@ -6252,7 +6309,7 @@ function App() {
   }, [pedidos, cotizaciones, ventasPOS, costos, gastos, clientes, catCostos, catGastos, proveedoresReg, stock, insumos, molduras, temas]);
 
   function agregarPedido(p) { setPedidos(function(ps) { return ps.concat([Object.assign({},p,{id:uid(),fecha:HOY})]); }); }
-  function agregarCot(c) { setCotizaciones(function(cs) { return cs.concat([Object.assign({},c,{id:uid()})]); }); }
+  function agregarCot(c) { setCotizaciones(function(cs) { return cs.concat([Object.assign({},c,{id:c.id||uid()})]); }); }
   function agregarVentaPOS(v) { setVentasPOS(function(vs) { return vs.concat([Object.assign({},v,{id:uid()})]); }); }
   const [cotConvertir, setCotConvertir] = useState(null);
   function convertirCot(c) { setCotConvertir(c); }
