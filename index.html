@@ -1041,6 +1041,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   const [editandoPedido, setEditandoPedido] = useState(null); // pedido original que estamos editando
   const [modalCliente, setModalCliente] = useState(false); // alta rápida de cliente desde el constructor
   const [modalCotGuardada, setModalCotGuardada] = useState(null); // cotizacion recien guardada, para mostrar su detalle
+  const [modalPedidoGuardado, setModalPedidoGuardado] = useState(null); // pedido recien guardado desde el Cotizador, para mostrar su detalle
 
   // Al elegir un cliente guardado en la cotización: llena nombre, tel y descuento sugerido
   function seleccionarClienteCot(c) {
@@ -1617,8 +1618,13 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
           });
           setEditandoPedido(null);
         } else {
+          const pedidoGuardado = Object.assign({}, p, {fecha: HOY});
           onPedidoCreado(p);
           setNextFolio(f => f+1);
+          // En vez de depender de window.open (que puede quedar bloqueado por el
+          // navegador), mostramos el detalle del pedido recien guardado. Desde ahi
+          // "Imprimir PDF" es un clic real del usuario, que nunca se bloquea.
+          setModalPedidoGuardado(pedidoGuardado);
         }
         setLineas([]);setMolSel(null);setProductos([]);setAlto("");setAncho("");
       }} nextFolio={editandoPedido ? editandoPedido.folio : nextFolio}/>}
@@ -1655,6 +1661,15 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
         <ModalCliente onClose={() => setModalCliente(false)} onGuardar={guardarClienteNuevo}/>
       )}
       {modalCotGuardada && <ModalCotizacionGuardada cotizacion={modalCotGuardada} onClose={() => setModalCotGuardada(null)} generarPDF={generarPDF}/>}
+      {modalPedidoGuardado && <ErrorBoundary><ModalDetallePedido
+        pedido={modalPedidoGuardado}
+        onClose={() => setModalPedidoGuardado(null)}
+        onEditar={() => setModalPedidoGuardado(null)}
+        onEliminar={() => { if(confirmar("¿Eliminar pedido #"+modalPedidoGuardado.folio+" de "+modalPedidoGuardado.cliente+"?")) { setPedidos(function(prev){ return prev.filter(function(x){ return String(x.folio) !== String(modalPedidoGuardado.folio); }); }); setModalPedidoGuardado(null); } }}
+        onPago={() => setModalPedidoGuardado(null)}
+        generarPDF={generarPDF}
+        stock={stock}
+      /></ErrorBoundary>}
     </div>
   );
 }
