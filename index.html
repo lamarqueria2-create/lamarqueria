@@ -714,6 +714,17 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
   });
   mesesConDatos.sort().reverse();
 
+  const totalPedido = p => calcularTotal(normalizarPedido(p));
+  const enProceso = pedidos.filter(function(p){ return !["Entregado","Bodega"].includes(p.estado); }).slice().sort(function(a,b){
+    const fa = a.fechaEntrega || "9999-99-99";
+    const fb = b.fechaEntrega || "9999-99-99";
+    return fa.localeCompare(fb);
+  });
+  const cxcTop10 = pedidos.filter(function(p){
+    if (p.estado === "Bodega") return false;
+    return Math.round(saldoPedido(p)) > 0;
+  }).slice().sort(function(a,b){ return saldoPedido(b) - saldoPedido(a); }).slice(0,10);
+
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
@@ -738,7 +749,7 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
         <KPI label="Cot. pendientes" value={cotPend} color={cotPend>0?T.amber:T.green}/>
         <KPI label="Bajo stock" value={bajoStock.length} color={bajoStock.length>0?T.red:T.green}/>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:20}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
         <Card>
           <ST>Resultados — {mesFiltro==="todos"?"Acumulado":MESES[parseInt(mesFiltro.split("-")[1])-1]+" "+mesFiltro.split("-")[0]}</ST>
           {[["Ingresos totales",fmt(totalVentas+totalPOS),T.amber,true],["(-) Costos de produccion","("+fmt(totalCostos)+")",T.orange,false],["Utilidad bruta",fmt(utilBruta),utilBruta>=0?T.green:T.red,true],["(-) Gastos operativos","("+fmt(totalGastos)+")",T.blue,false]].map(function(row) {
@@ -756,26 +767,8 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
           </div>
         </Card>
         <Card>
-          <ST>Estado de Pedidos</ST>
-          {ESTADOS_K.map(function(e) {
-            const cnt = pedidos.filter(p => p.estado === e).length;
-            const col = META_K[e] || {};
-            const pct = pedidos.length ? (cnt/pedidos.length)*100 : 0;
-            return (
-              <div key={e} style={{display:"flex",alignItems:"center",gap:10,marginBottom:9}}>
-                <div style={{width:8,height:8,borderRadius:"50%",background:col.dot,flexShrink:0}}/>
-                <span style={{fontSize:12,flex:1,fontFamily:FS}}>{e}</span>
-                <div style={{flex:2,background:T.bgDark,borderRadius:4,height:7,overflow:"hidden"}}>
-                  <div style={{width:pct+"%",height:"100%",background:col.dot,borderRadius:4}}/>
-                </div>
-                <span style={{fontSize:12,minWidth:18,textAlign:"right",fontFamily:FS,fontWeight:700}}>{cnt}</span>
-              </div>
-            );
-          })}
-        </Card>
-        <Card>
           <ST>Alertas</ST>
-          {urgentes.length===0 && bajoStock.length===0 && porCobrar===0 && <div style={{color:T.green,fontSize:12,fontFamily:FS}}>Sin alertas.</div>}
+          {urgentes.length===0 && <div style={{color:T.green,fontSize:12,fontFamily:FS}}>Sin entregas urgentes.</div>}
           {urgentes.map(function(p) {
             const d = dRest(p.fechaEntrega);
             return (
@@ -785,17 +778,49 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
               </div>
             );
           })}
-          {bajoStock.map(function(p) {
-            return (
-              <div key={p.id} style={{background:T.orangeBg,border:"1px solid "+T.orange+"30",borderRadius:7,padding:"6px 10px",marginBottom:5}}>
-                <div style={{color:T.orange,fontWeight:600,fontSize:11,fontFamily:FS}}>Stock bajo — {p.nombre}: {p.stock} pzas</div>
-              </div>
-            );
-          })}
-          {porCobrar > 0 && (
-            <div style={{background:"#FFF8E0",border:"1px solid "+T.amber+"30",borderRadius:7,padding:"7px 10px",marginTop:8}}>
-              <div style={{color:T.amber,fontWeight:600,fontSize:12,fontFamily:FS}}>Por cobrar</div>
-              <div style={{fontWeight:700,fontSize:16,fontFamily:FONT}}>{fmt(porCobrar)}</div>
+        </Card>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
+        <Card>
+          <ST>Estado de Pedidos — En Proceso</ST>
+          {enProceso.length === 0 ? (
+            <div style={{color:T.textFade,fontSize:12,fontFamily:FS,padding:"10px 0"}}>No hay pedidos en proceso.</div>
+          ) : (
+            <div style={{maxHeight:320,overflowY:"auto"}}>
+              {enProceso.map(function(p){
+                const dias = dRest(p.fechaEntrega);
+                const colorDias = dias===null ? T.textFade : dias<=1 ? T.red : dias<=3 ? T.orange : T.green;
+                return (
+                  <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid "+T.border,gap:10}}>
+                    <div style={{minWidth:0,flex:1}}>
+                      <div style={{fontFamily:FONT,fontWeight:700,fontSize:13,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#{p.folio} · {p.cliente}</div>
+                      <div style={{fontSize:10,color:colorDias,fontFamily:FS,marginTop:2}}>{dias===null?"Sin fecha":dias<0?Math.abs(dias)+"d tarde":dias===0?"Hoy":dias===1?"Mañana":"En "+dias+"d"} · {p.estado}</div>
+                    </div>
+                    <div style={{fontFamily:FONT,fontWeight:700,fontSize:13,color:T.amber,whiteSpace:"nowrap"}}>{fmt(totalPedido(p))}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+        <Card>
+          <ST>Cuentas por Cobrar — Top 10</ST>
+          {cxcTop10.length === 0 ? (
+            <div style={{color:T.green,fontSize:12,fontFamily:FS,padding:"10px 0"}}>Sin saldos pendientes.</div>
+          ) : (
+            <div style={{maxHeight:320,overflowY:"auto"}}>
+              {cxcTop10.map(function(p){
+                const saldo = saldoPedido(p);
+                return (
+                  <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid "+T.border,gap:10}}>
+                    <div style={{minWidth:0,flex:1}}>
+                      <div style={{fontFamily:FONT,fontWeight:700,fontSize:13,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#{p.folio} · {p.cliente}</div>
+                      <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginTop:2}}>{p.estado==="Entregado"?"Entregado · debe":p.estado}</div>
+                    </div>
+                    <div style={{fontFamily:FONT,fontWeight:700,fontSize:13,color:T.orange,whiteSpace:"nowrap"}}>{fmt(saldo)}</div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </Card>
@@ -821,8 +846,8 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
             );
           })}
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,borderTop:"1px solid "+T.border,paddingTop:14}}>
-          {[["Ingresos del año",fmt(ingresosAno),T.amber],["Costos del año","("+fmt(costosAnoT)+")",T.orange],["Gastos del año","("+fmt(gastosAnoT)+")",T.blue],["Utilidad neta del año",fmt(utilNetaAno),utilNetaAno>=0?T.green:T.red]].map(function(row){
+        <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,borderTop:"1px solid "+T.border,paddingTop:14}}>
+          {[["Ingresos del año",fmt(ingresosAno),T.amber],["Costos del año","("+fmt(costosAnoT)+")",T.orange],["Utilidad bruta del año",fmt(utilBrutaAno),utilBrutaAno>=0?T.green:T.red],["Gastos del año","("+fmt(gastosAnoT)+")",T.blue],["Utilidad neta del año",fmt(utilNetaAno),utilNetaAno>=0?T.green:T.red]].map(function(row){
             return(
               <div key={row[0]} style={{textAlign:"center"}}>
                 <div style={{color:T.textFade,fontSize:10,fontFamily:FS,marginBottom:4}}>{row[0]}</div>
@@ -833,187 +858,6 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
         </div>
       </Card>
 
-      {/* AVANCE DIARIO POS */}
-      <Card style={{marginTop:16,borderTop:"3px solid "+T.amber}}>
-        <ST>📈 Avance de Ventas POS — Hoy ({fmtD(HOY)})</ST>
-        {(function(){
-          const ventasHoy = (ventasPOS||[]).filter(function(v){return v.fecha === HOY_ACTUAL();});
-          if (ventasHoy.length === 0) {
-            return <div style={{padding:"20px",textAlign:"center",color:T.textFade,fontFamily:FS,fontSize:13}}>Sin ventas POS registradas hoy</div>;
-          }
-          const tipos = {Bastidor:{n:0,m:0},Cartel:{n:0,m:0},Canva:{n:0,m:0},Espejo:{n:0,m:0},"Marco PVC":{n:0,m:0},Otros:{n:0,m:0}};
-          let totGeneral = 0, totTickets = ventasHoy.length;
-          ventasHoy.forEach(function(v){
-            const items = parsearJSON(v.items);
-            items.forEach(function(it){
-              const cat = (it.descripcion||"").indexOf("Bastidor") >= 0 ? "Bastidor" :
-                          (it.descripcion||"").indexOf("Cartel") >= 0 ? "Cartel" :
-                          (it.descripcion||"").indexOf("Canva") >= 0 ? "Canva" :
-                          (it.descripcion||"").indexOf("Espejo") >= 0 ? "Espejo" :
-                          (it.descripcion||"").indexOf("Marco PVC") >= 0 ? "Marco PVC" : "Otros";
-              tipos[cat].n += 1;
-              tipos[cat].m += parseFloat(it.precio)||0;
-              totGeneral += parseFloat(it.precio)||0;
-            });
-          });
-          const cats = [
-            {key:"Bastidor",color:"#E65100"},
-            {key:"Cartel",color:"#1565C0"},
-            {key:"Canva",color:"#6A1B9A"},
-            {key:"Espejo",color:"#00838F"},
-            {key:"Marco PVC",color:"#558B2F"},
-            {key:"Otros",color:"#757575"},
-          ];
-          return (
-            <div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr) 1.2fr",gap:8,marginBottom:8}}>
-                {cats.map(function(c){
-                  const t = tipos[c.key];
-                  return (
-                    <div key={c.key} style={{textAlign:"center",borderLeft:"3px solid "+c.color,paddingLeft:8}}>
-                      <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginBottom:2}}>{c.key}</div>
-                      <div style={{fontSize:14,fontWeight:700,fontFamily:FONT,color:c.color}}>{fmt(t.m)}</div>
-                      <div style={{fontSize:9,color:T.textFade,fontFamily:FS}}>{t.n} pza{t.n!==1?"s":""}</div>
-                    </div>
-                  );
-                })}
-                <div style={{textAlign:"center",background:"#FFF8E0",borderRadius:6,padding:"6px 8px",border:"1px solid "+T.amber+"50"}}>
-                  <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginBottom:2,fontWeight:600}}>TOTAL HOY</div>
-                  <div style={{fontSize:16,fontWeight:700,fontFamily:FONT,color:T.amber}}>{fmt(totGeneral)}</div>
-                  <div style={{fontSize:9,color:T.textFade,fontFamily:FS}}>{totTickets} ticket{totTickets!==1?"s":""}</div>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-      </Card>
-
-      {/* ÚLTIMAS NOTAS POS DE HOY */}
-      {(function(){
-        const ultimasHoy = (ventasPOS||[]).filter(function(v){return v.fecha === HOY_ACTUAL();}).slice().sort(function(a,b){
-          const fa = parseInt(String(a.folio||"").replace(/\D/g,""))||0;
-          const fb = parseInt(String(b.folio||"").replace(/\D/g,""))||0;
-          return fb - fa;
-        }).slice(0,3);
-        if (ultimasHoy.length === 0) return null;
-        return (
-          <Card style={{marginTop:16,borderTop:"3px solid #00838F"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <ST>🧾 Últimas notas POS</ST>
-              <div style={{fontSize:10,color:T.textFade,fontFamily:FS,fontStyle:"italic"}}>Las {ultimasHoy.length} más recientes de hoy</div>
-            </div>
-            <div style={{display:"grid",gap:8}}>
-              {ultimasHoy.map(function(v){
-                const cantItems = (v.items||[]).length;
-                const cats = {};
-                (v.items||[]).forEach(function(it){
-                  const desc = String(it.descripcion||it.nombre||"").toLowerCase();
-                  let cat = "Otros";
-                  if (desc.includes("bastidor")) cat = "Bastidor";
-                  else if (desc.includes("cartel")) cat = "Cartel";
-                  else if (desc.includes("canva")) cat = "Canva";
-                  else if (desc.includes("espejo")) cat = "Espejo";
-                  else if (desc.includes("marco pvc") || desc.includes("pvc")) cat = "Marco PVC";
-                  else if (desc.includes("enmarca") || desc.includes("marco")) cat = "Enmarcado";
-                  cats[cat] = (cats[cat]||0) + 1;
-                });
-                const resumen = Object.entries(cats).map(function([c,n]){return n+"× "+c;}).join(", ");
-                return (
-                  <div key={v.id||v.folio} style={{padding:"10px 12px",background:T.bgDark,borderRadius:7,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
-                    <div style={{flex:1}}>
-                      <div style={{fontSize:13,fontWeight:700,fontFamily:FONT,color:T.text}}>#{v.folio} · {v.cliente||"Publico General"}</div>
-                      <div style={{fontSize:11,color:T.textSub,fontFamily:FS,marginTop:2}}>{resumen || cantItems+" item"+(cantItems!==1?"s":"")}</div>
-                    </div>
-                    <div style={{textAlign:"right"}}>
-                      <div style={{fontSize:14,fontWeight:700,fontFamily:FONT,color:T.green}}>{fmt(v.anticipo)}</div>
-                      <div style={{fontSize:9,color:T.textFade,fontFamily:FS,marginTop:2}}>{v.metodoPago||"—"}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-        );
-      })()}
-
-      {/* HISTÓRICO DE VENTAS POS POR MES Y TIPO */}
-      <Card style={{marginTop:16}}>
-        <ST>📊 Histórico de Ventas POS por Mes y Tipo</ST>
-        {(function(){
-          const totales = {bastidor:0,cartel:0,canva:0,enmarcado:0,otros:0,total:0};
-          HISTORICO_POS.forEach(function(m){
-            totales.bastidor += m.bastidor;
-            totales.cartel += m.cartel;
-            totales.canva += m.canva;
-            totales.enmarcado += m.enmarcado;
-            totales.otros += m.otros;
-            totales.total += m.total;
-          });
-          const tipos = [
-            {key:"bastidor",label:"Bastidor",color:"#E65100"},
-            {key:"cartel",label:"Cartel",color:"#1565C0"},
-            {key:"canva",label:"Canva",color:"#6A1B9A"},
-            {key:"enmarcado",label:"Enmarcado",color:"#2E7D32"},
-            {key:"otros",label:"Otros",color:"#757575"},
-          ];
-          return (
-            <div>
-              {/* Resumen totales */}
-              <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8,marginBottom:14,paddingBottom:12,borderBottom:"1px solid "+T.border}}>
-                {tipos.map(function(t){
-                  const pct = totales.total ? (totales[t.key]/totales.total)*100 : 0;
-                  return (
-                    <div key={t.key} style={{textAlign:"center",borderLeft:"3px solid "+t.color,paddingLeft:8}}>
-                      <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginBottom:2}}>{t.label}</div>
-                      <div style={{fontSize:14,fontWeight:700,fontFamily:FONT,color:t.color}}>{fmt(totales[t.key])}</div>
-                      <div style={{fontSize:9,color:T.textFade,fontFamily:FS}}>{pct.toFixed(1)}%</div>
-                    </div>
-                  );
-                })}
-                <div style={{textAlign:"center",borderLeft:"3px solid "+T.amber,paddingLeft:8,background:"#FFF8E0",borderRadius:5,padding:"4px 8px"}}>
-                  <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginBottom:2}}>TOTAL</div>
-                  <div style={{fontSize:14,fontWeight:700,fontFamily:FONT,color:T.amber}}>{fmt(totales.total)}</div>
-                </div>
-              </div>
-
-              {/* Tabla detallada por mes */}
-              <table style={{width:"100%",borderCollapse:"collapse",fontFamily:FS,fontSize:12}}>
-                <thead>
-                  <tr style={{background:T.bgDark}}>
-                    <th style={{padding:"8px 10px",textAlign:"left",fontWeight:600,color:T.textFade,fontSize:10,letterSpacing:"0.05em"}}>MES</th>
-                    {tipos.map(function(t){
-                      return <th key={t.key} style={{padding:"8px 10px",textAlign:"right",fontWeight:600,color:t.color,fontSize:10,letterSpacing:"0.05em"}}>{t.label.toUpperCase()}</th>;
-                    })}
-                    <th style={{padding:"8px 10px",textAlign:"right",fontWeight:700,color:T.amber,fontSize:10,letterSpacing:"0.05em"}}>TOTAL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {HISTORICO_POS.map(function(m){
-                    return (
-                      <tr key={m.mes} style={{borderBottom:"1px solid "+T.border}}>
-                        <td style={{padding:"8px 10px",fontWeight:600}}>{m.mes} {m.anio}</td>
-                        {tipos.map(function(t){
-                          return <td key={t.key} style={{padding:"8px 10px",textAlign:"right",color:m[t.key]?T.text:T.textFade}}>{m[t.key]?fmt(m[t.key]):"—"}</td>;
-                        })}
-                        <td style={{padding:"8px 10px",textAlign:"right",fontWeight:700,color:T.amber}}>{fmt(m.total)}</td>
-                      </tr>
-                    );
-                  })}
-                  <tr style={{background:T.bgDark,fontWeight:700}}>
-                    <td style={{padding:"10px",fontWeight:700,color:T.text}}>TOTAL ACUMULADO</td>
-                    {tipos.map(function(t){
-                      return <td key={t.key} style={{padding:"10px",textAlign:"right",color:t.color,fontWeight:700}}>{fmt(totales[t.key])}</td>;
-                    })}
-                    <td style={{padding:"10px",textAlign:"right",color:T.amber,fontWeight:700,fontSize:14}}>{fmt(totales.total)}</td>
-                  </tr>
-                </tbody>
-              </table>
-
-              <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginTop:10,fontStyle:"italic"}}>* Datos históricos importados desde respaldo</div>
-            </div>
-          );
-        })()}
-      </Card>
     </div>
   );
 }
