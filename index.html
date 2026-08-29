@@ -2050,7 +2050,7 @@ function TarjetaHoy({p, calcularTotal, calcularSaldo, diasParaEntrega, colorDias
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontWeight:700,fontSize:14,fontFamily:FONT}}>{p.cliente}</div>
-          <div style={{color:T.textFade,fontSize:11,fontFamily:FS,marginBottom:5}}>#{p.folio}</div>
+          <div style={{color:T.textFade,fontSize:11,fontFamily:FS,marginBottom:5}}>#{p.folio} <span style={{fontSize:9,opacity:0.65}}>· creado {fmtD(p.fecha)}</span></div>
           {grupos.map(function(g){
             return (
               <div key={g.id} style={{fontSize:11,fontFamily:FS,color:T.textSub,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
@@ -2526,7 +2526,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
                   return (
                     <div key={String(p.folio)+"-"+String(p.id)} style={{background:entregadoConSaldo?"#FFEBEE":(urg?"#FFEBEE":T.bgCard),border:entregadoConSaldo?"2px solid "+T.red:(urg?"1px solid "+T.red+"40":"1px solid "+T.border),borderRadius:8,padding:"9px 10px",marginBottom:7}}>
                       <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                        <div><div style={{fontWeight:700,fontSize:12,fontFamily:FONT}}>{p.cliente}</div><div style={{color:T.textFade,fontSize:10,fontFamily:FS}}>#{p.folio}</div></div>
+                        <div><div style={{fontWeight:700,fontSize:12,fontFamily:FONT}}>{p.cliente}</div><div style={{color:T.textFade,fontSize:10,fontFamily:FS}}>#{p.folio} <span style={{opacity:0.65}}>· {fmtD(p.fecha)}</span></div></div>
                         {entregadoConSaldo && <span style={{background:T.red,color:"#fff",borderRadius:6,fontSize:9,padding:"1px 5px",fontWeight:700}}>💰 SALDO</span>}
                         {!entregadoConSaldo && urg && <span style={{background:T.red,color:"#fff",borderRadius:6,fontSize:9,padding:"1px 5px",fontWeight:700}}>⚡</span>}
                       </div>
@@ -2583,7 +2583,10 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
             return (
               <Card key={p.id} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,padding:"10px 14px",borderLeft:"3px solid "+(entregadoConSaldo?T.red:col.dot),background:entregadoConSaldo?"#FFEBEE":undefined}}>
                 {p.imagen && <img src={p.imagen} alt="" style={{width:40,height:40,objectFit:"cover",borderRadius:5}}/>}
-                <div style={{width:46,color:T.textFade,fontSize:11,fontFamily:FS}}>#{p.folio}</div>
+                <div style={{width:60,color:T.textFade,fontSize:11,fontFamily:FS}}>
+                  <div>#{p.folio}</div>
+                  <div style={{fontSize:9,opacity:0.65,marginTop:1}}>{fmtD(p.fecha)}</div>
+                </div>
                 <div style={{flex:2}}>
                   <div style={{fontWeight:700,fontSize:13,fontFamily:FONT}}>{p.cliente}</div>
                   <div style={{color:entregadoConSaldo?T.red:T.textFade,fontSize:11,fontFamily:FS,fontWeight:entregadoConSaldo?700:400}}>
