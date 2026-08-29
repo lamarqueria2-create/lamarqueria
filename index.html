@@ -685,7 +685,7 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
   const gastosFil = filtrarPorMes(gastos, "fecha");
 
   const activos = pedidos.filter(p => !["Entregado","Bodega"].includes(p.estado));
-  const totalVentas = pedidosFil.filter(p => p.estado !== "Bodega").reduce((s,p) => s+totI(p.items), 0);
+  const totalVentas = pedidosFil.filter(p => p.estado !== "Bodega").reduce((s,p) => s+calcularTotal(p), 0);
   const totalPOS = ventasPOSFil.reduce((s,v) => s+totI(v.items), 0);
   const totalCobrado = pedidosFil.filter(p => p.estado !== "Bodega").reduce((s,p) => s+(p.anticipo||0), 0) + totalPOS;
   const totalCostos = costosFil.reduce((s,c) => s+c.monto, 0);
@@ -701,7 +701,7 @@ function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS})
   const posAno = ventasPOS.filter(v => (v.fecha||"").startsWith(String(anoActual)));
   const costosAno = costos.filter(c => (c.fecha||"").startsWith(String(anoActual)));
   const gastosAno = gastos.filter(g => (g.fecha||"").startsWith(String(anoActual)));
-  const ingresosAno = pedAno.filter(p=>p.estado!=="Bodega").reduce((s,p)=>s+totI(p.items),0) + posAno.reduce((s,v)=>s+totI(v.items),0);
+  const ingresosAno = pedAno.filter(p=>p.estado!=="Bodega").reduce((s,p)=>s+calcularTotal(p),0) + posAno.reduce((s,v)=>s+totI(v.items),0);
   const costosAnoT = costosAno.reduce((s,c)=>s+c.monto,0);
   const gastosAnoT = gastosAno.reduce((s,g)=>s+g.monto,0);
   const utilBrutaAno = ingresosAno - costosAnoT;
