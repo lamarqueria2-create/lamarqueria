@@ -890,7 +890,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
   // Al elegir un cliente guardado en la cotización: llena nombre, tel y descuento sugerido
   function seleccionarClienteCot(c) {
     setCliCot(c.nombre || "");
-    setTelCot(c.telefono || "");
+    setTelCot(c.telefono != null ? String(c.telefono) : "");
     if ((parseFloat(c.descuento)||0) > 0) setDescCot(String(parseFloat(c.descuento)));
   }
   // Guardar cliente nuevo desde el constructor y seleccionarlo de una vez
@@ -939,7 +939,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
       });
       setProductos(productosReconstruidos);
       setCliCot(cotizacionAEditar.cliente || "");
-      setTelCot(cotizacionAEditar.tel || "");
+      setTelCot(cotizacionAEditar.tel != null ? String(cotizacionAEditar.tel) : "");
       setValCot(cotizacionAEditar.fechaEntrega || cotizacionAEditar.validez || "");
       setNotaCot(cotizacionAEditar.nota || "");
       setDescCot(cotizacionAEditar.descuentoPct ? String(cotizacionAEditar.descuentoPct) : "");
@@ -1493,7 +1493,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
           </div>
           <div style={{display:"flex",gap:8,marginBottom:10}}>
             <Btn variant="ghost" style={{flex:1}} onClick={() => generarPDF({folio:"C-"+nextFolioQ,tipo:"cotizacion",cliente:cliCot,clienteTel:telCot,clienteCorreo:"",fecha:HOY,fechaEntrega:valCot,items:todosItems,productos:productosMeta,stock:stock,anticipo:0,descuento:0,descuentoPct:parseFloat(descCot)||0,iva:false})}>Vista previa PDF</Btn>
-            {telCot && <a href={"https://wa.me/52"+telCot.replace(/\D/g,"")+"?text="+encodeURIComponent("Cotizacion C-"+nextFolioQ+" — La Marqueria\nCliente: "+cliCot+"\nTotal: "+fmt(totalTotal)+"\nValida: "+fmtD(valCot)+"\n\nEn breve le enviamos el PDF. Gracias 🙏")} target="_blank" rel="noreferrer" style={{flex:1,display:"block",background:"#25D366",color:"#fff",borderRadius:7,padding:"8px 0",textAlign:"center",textDecoration:"none",fontWeight:700,fontSize:13,fontFamily:FS}}>WhatsApp</a>}
+            {telCot && <a href={"https://wa.me/52"+String(telCot||"").replace(/\D/g,"")+"?text="+encodeURIComponent("Cotizacion C-"+nextFolioQ+" — La Marqueria\nCliente: "+cliCot+"\nTotal: "+fmt(totalTotal)+"\nValida: "+fmtD(valCot)+"\n\nEn breve le enviamos el PDF. Gracias 🙏")} target="_blank" rel="noreferrer" style={{flex:1,display:"block",background:"#25D366",color:"#fff",borderRadius:7,padding:"8px 0",textAlign:"center",textDecoration:"none",fontWeight:700,fontSize:13,fontFamily:FS}}>WhatsApp</a>}
           </div>
           <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
             <Btn variant="ghost" onClick={() => setModalCot(false)}>Cancelar</Btn>
