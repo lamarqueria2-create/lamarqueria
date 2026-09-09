@@ -168,6 +168,79 @@ function saldoPedido(p) {
   return Math.max(0, tot - (parseFloat(n.anticipo)||0));
 }
 
+// ═══════════════════════════════════════════════════════
+//  REPORTEADOR: estimación de costo por item (cuando no se
+//  guardó el costo real) comparando el nombre del item contra
+//  los catálogos de molduras, insumos y stock. El costo y el
+//  precio de catálogo escalan por el mismo factor (metros,
+//  área, etc.), así que el costo real de un item se puede
+//  estimar con la razón costo/precio del catálogo aplicada
+//  al precio ya guardado del item — sin necesitar las medidas.
+// ═══════════════════════════════════════════════════════
+function _norm(s) { return String(s==null?"":s).trim().toLowerCase(); }
+
+// ¿El nombre de este item corresponde a una moldura del catálogo?
+function esMolduraPorNombre(nombre, molduras) {
+  const n = _norm(nombre);
+  if (!n) return false;
+  return (molduras||[]).some(function(m){ return _norm(m.nombre) === n; });
+}
+
+// Devuelve {costo, coincidio} para un item, comparando contra molduras,
+// luego insumos, luego stock (en ese orden). costo=null si no hay match.
+function estimarCostoItem(item, molduras, insumos, stock) {
+  const nombre = _norm(item.nombre);
+  const precio = parseFloat(item.precio)||0;
+  if (!nombre) return {costo:null, coincidio:false};
+
+  const mol = (molduras||[]).find(function(m){ return _norm(m.nombre) === nombre; });
+  if (mol && parseFloat(mol.precio_ml) > 0) {
+    return {costo: precio * (parseFloat(mol.costo_ml)||0) / parseFloat(mol.precio_ml), coincidio:true};
+  }
+  const ins = (insumos||[]).find(function(i){ return _norm(i.nombre) === nombre; });
+  if (ins && parseFloat(ins.precio) > 0) {
+    return {costo: precio * (parseFloat(ins.costo)||0) / parseFloat(ins.precio), coincidio:true};
+  }
+  const st = (stock||[]).find(function(s){ return _norm(s.nombre) === nombre; });
+  if (st && parseFloat(st.precio) > 0 && st.costo != null) {
+    return {costo: precio * (parseFloat(st.costo)||0) / parseFloat(st.precio), coincidio:true};
+  }
+  return {costo:null, coincidio:false};
+}
+
+// Costo, ingreso y utilidad ESTIMADOS de un pedido completo.
+// "cobertura" = % del ingreso cuyo item sí tuvo un costo de referencia
+// (para mostrar qué tan confiable es el estimado).
+function utilidadPedidoEstimada(pedido, molduras, insumos, stock) {
+  const p = normalizarPedido(pedido);
+  const ingreso = calcularTotal(p);
+  const items = p.items || [];
+  let costoTotal = 0, ingresoConCosto = 0, tieneMoldura = false;
+  items.forEach(function(it) {
+    const precioItem = parseFloat(it.precio)||0;
+    const r = estimarCostoItem(it, molduras, insumos, stock);
+    if (r.coincidio) {
+      costoTotal += r.costo;
+      ingresoConCosto += precioItem;
+    }
+    if (esMolduraPorNombre(it.nombre, molduras)) tieneMoldura = true;
+  });
+  // Si hay productos con cantidad>1, escalar el costo proporcionalmente al ingreso
+  // (mismo factor que calcularTotal aplica por producto).
+  const ingresoItemsCrudo = items.reduce(function(s,it){ return s+(parseFloat(it.precio)||0); },0);
+  const factorEscala = ingresoItemsCrudo > 0 ? ingreso/ingresoItemsCrudo : 1;
+  costoTotal = costoTotal * factorEscala;
+  const cobertura = ingresoItemsCrudo > 0 ? (ingresoConCosto/ingresoItemsCrudo)*100 : 0;
+  return {
+    ingreso: ingreso,
+    costo: costoTotal,
+    utilidad: ingreso - costoTotal,
+    margen: ingreso > 0 ? ((ingreso-costoTotal)/ingreso)*100 : 0,
+    cobertura: cobertura,
+    esEnmarcado: tieneMoldura
+  };
+}
+
 // Días restantes para la entrega y color semáforo
 function diasParaEntrega(fechaEntrega) {
   if (!fechaEntrega) return null;
@@ -670,6 +743,444 @@ function KPI({icon, label, value, color, accent}) {
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────
+// ── MINI GRÁFICOS SVG (sin librerías externas, consistente con el resto de la app) ──
+function MiniBarChart({data, height, color}) {
+  if (!data || data.length === 0) return <div style={{color:T.textFade,fontSize:12,fontFamily:FS,padding:"20px 0",textAlign:"center"}}>Sin datos para graficar</div>;
+  const w = 600, h = height || 200;
+  const maxVal = Math.max.apply(null, data.map(function(d){return d.value;})) || 1;
+  const barW = w / data.length;
+  const padBottom = 34;
+  return (
+    <svg viewBox={"0 0 "+w+" "+h} style={{width:"100%",height:h,display:"block"}} preserveAspectRatio="none">
+      {data.map(function(d,i){
+        const barH = maxVal>0 ? ((d.value/maxVal)*(h-padBottom-16)) : 0;
+        const x = i*barW + barW*0.15;
+        const bw = barW*0.7;
+        const y = h - padBottom - barH;
+        return (
+          <g key={i}>
+            <rect x={x} y={y} width={bw} height={Math.max(barH,1)} fill={color||T.amber} rx={3}/>
+            <text x={x+bw/2} y={h-padBottom+14} textAnchor="middle" fontSize="9" fill={T.textFade} fontFamily={FS}>{String(d.label).length>10?String(d.label).slice(0,9)+"…":d.label}</text>
+            <text x={x+bw/2} y={y-4} textAnchor="middle" fontSize="9" fontWeight="700" fill={T.text} fontFamily={FS}>{d.value>=1000?(d.value/1000).toFixed(1)+"k":Math.round(d.value)}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function MiniPieChart({data}) {
+  if (!data || data.length === 0) return null;
+  const s = 170;
+  const total = data.reduce(function(s2,d){return s2+d.value;},0) || 1;
+  const cx=s/2, cy=s/2, r=s/2-4;
+  let anguloAcum = -Math.PI/2;
+  const paletaDefault = [T.amber, T.blue, T.green, T.orange, T.red, "#6A1B9A"];
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:18,flexWrap:"wrap"}}>
+      <svg viewBox={"0 0 "+s+" "+s} style={{width:s,height:s,flexShrink:0}}>
+        {data.map(function(d,i){
+          const frac = total>0 ? d.value/total : 0;
+          const angulo = frac*2*Math.PI;
+          const x1 = cx + r*Math.cos(anguloAcum);
+          const y1 = cy + r*Math.sin(anguloAcum);
+          anguloAcum += angulo;
+          const x2 = cx + r*Math.cos(anguloAcum);
+          const y2 = cy + r*Math.sin(anguloAcum);
+          const largeArc = angulo > Math.PI ? 1 : 0;
+          const path = "M"+cx+","+cy+" L"+x1+","+y1+" A"+r+","+r+" 0 "+largeArc+" 1 "+x2+","+y2+" Z";
+          const color = d.color || paletaDefault[i%paletaDefault.length];
+          return <path key={i} d={path} fill={color} stroke="#fff" strokeWidth="1"/>;
+        })}
+      </svg>
+      <div style={{display:"flex",flexDirection:"column",gap:7}}>
+        {data.map(function(d,i){
+          const color = d.color || paletaDefault[i%paletaDefault.length];
+          const pct = total>0 ? ((d.value/total)*100).toFixed(1) : "0";
+          return (
+            <div key={i} style={{display:"flex",alignItems:"center",gap:7,fontSize:12,fontFamily:FS}}>
+              <div style={{width:10,height:10,borderRadius:2,background:color,flexShrink:0}}/>
+              <span style={{color:T.textSub}}>{d.label}</span>
+              <span style={{fontWeight:700,marginLeft:10}}>{pct}%</span>
+              <span style={{color:T.textFade,fontSize:11}}>({fmt(d.value)})</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function exportarReportePDF(titulo, subtitulo, headers, filas, totalRow) {
+  const win = window.open("", "_blank", "width=850,height=1000");
+  if (!win) { alert("Permite ventanas emergentes para exportar el PDF."); return; }
+  const headHTML = headers.map(function(h){ return "<th style='padding:7px 9px;text-align:left;font-size:11px;color:#666;border-bottom:2px solid #333;white-space:nowrap'>"+h+"</th>"; }).join("");
+  const filasHTML = filas.map(function(row){
+    return "<tr>" + row.map(function(cell){ return "<td style='padding:6px 9px;border-bottom:1px solid #eee;font-size:12px'>"+cell+"</td>"; }).join("") + "</tr>";
+  }).join("");
+  const totalHTML = totalRow ? ("<tr style='font-weight:700;background:#f5f5f5'>"+totalRow.map(function(c){return "<td style='padding:8px 9px;font-size:12px;border-top:2px solid #333'>"+c+"</td>";}).join("")+"</tr>") : "";
+  win.document.write(
+    "<!DOCTYPE html><html><head><title>"+titulo+"</title><meta charset='utf-8'>" +
+    "<style>body{font-family:Arial,Helvetica,sans-serif;padding:28px;color:#222}" +
+    "h1{font-size:19px;margin:0 0 3px 0}.sub{color:#777;font-size:12px;margin-bottom:18px}" +
+    "table{width:100%;border-collapse:collapse}</style></head><body>" +
+    "<h1>"+titulo+"</h1><div class='sub'>"+subtitulo+"</div>" +
+    "<table><thead><tr>"+headHTML+"</tr></thead><tbody>"+filasHTML+totalHTML+"</tbody></table>" +
+    "</body></html>"
+  );
+  win.document.close();
+  setTimeout(function(){ win.print(); }, 400);
+}
+
+function TabReportes({pedidos, ventasPOS, clientes, molduras, insumos, stock}) {
+  const [tipoReporte, setTipoReporte] = useState("pedidos_utilidad");
+  const [modoFecha, setModoFecha] = useState("mes_actual");
+  const [fechaDesde, setFechaDesde] = useState("");
+  const [fechaHasta, setFechaHasta] = useState("");
+  const [filtroCliente, setFiltroCliente] = useState("");
+
+  function pad2(n) { return String(n).padStart(2,"0"); }
+  function ultimoDiaMes(y,m) { return new Date(y,m,0).getDate(); }
+
+  const rango = React.useMemo(function() {
+    const hoy = HOY_ACTUAL();
+    const y = parseInt(hoy.slice(0,4)), m = parseInt(hoy.slice(5,7));
+    if (modoFecha === "mes_actual") return {desde:y+"-"+pad2(m)+"-01", hasta:y+"-"+pad2(m)+"-"+pad2(ultimoDiaMes(y,m))};
+    if (modoFecha === "mes_anterior") { let ym=m-1, yy=y; if(ym===0){ym=12;yy=y-1;} return {desde:yy+"-"+pad2(ym)+"-01", hasta:yy+"-"+pad2(ym)+"-"+pad2(ultimoDiaMes(yy,ym))}; }
+    if (modoFecha === "anio_actual") return {desde:y+"-01-01", hasta:y+"-12-31"};
+    if (modoFecha === "personalizado") return {desde:fechaDesde||"0000-01-01", hasta:fechaHasta||"9999-12-31"};
+    return {desde:"0000-01-01", hasta:"9999-12-31"};
+  }, [modoFecha, fechaDesde, fechaHasta]);
+
+  function enRango(fecha) { if (!fecha) return false; const f = String(fecha).slice(0,10); return f >= rango.desde && f <= rango.hasta; }
+  function coincideCliente(nombreCliente) { if (!filtroCliente) return true; return _norm(nombreCliente).indexOf(_norm(filtroCliente)) >= 0; }
+
+  const pedidosFiltrados = React.useMemo(function() {
+    return (pedidos||[]).filter(function(p){ return p.estado !== "Bodega" && enRango(p.fecha) && coincideCliente(p.cliente); });
+  }, [pedidos, rango, filtroCliente]);
+
+  const ventasPOSFiltradas = React.useMemo(function() {
+    return (ventasPOS||[]).filter(function(v){ return enRango(v.fecha) && coincideCliente(v.cliente); });
+  }, [ventasPOS, rango, filtroCliente]);
+
+  const filasPedidos = React.useMemo(function() {
+    return pedidosFiltrados.map(function(p){
+      const u = utilidadPedidoEstimada(p, molduras, insumos, stock);
+      return Object.assign({folio:p.folio, cliente:p.cliente, fecha:p.fecha, estado:p.estado}, u);
+    }).sort(function(a,b){ return String(b.fecha).localeCompare(String(a.fecha)); });
+  }, [pedidosFiltrados, molduras, insumos, stock]);
+
+  const totalesPedidos = React.useMemo(function() {
+    return filasPedidos.reduce(function(acc,f){ acc.ingreso+=f.ingreso; acc.costo+=f.costo; acc.utilidad+=f.utilidad; return acc; }, {ingreso:0,costo:0,utilidad:0});
+  }, [filasPedidos]);
+
+  const filasClientes = React.useMemo(function() {
+    const mapa = {};
+    filasPedidos.forEach(function(f){
+      const key = f.cliente || "Sin nombre";
+      if (!mapa[key]) mapa[key] = {cliente:key, pedidos:0, ingreso:0, costo:0, utilidad:0};
+      mapa[key].pedidos++; mapa[key].ingreso+=f.ingreso; mapa[key].costo+=f.costo; mapa[key].utilidad+=f.utilidad;
+    });
+    return Object.values(mapa).map(function(c){ return Object.assign({}, c, {margen: c.ingreso>0?(c.utilidad/c.ingreso)*100:0, ticket: c.ingreso/c.pedidos}); }).sort(function(a,b){ return b.utilidad-a.utilidad; });
+  }, [filasPedidos]);
+
+  function utilidadItemPOS(it) {
+    const precio = parseFloat(it.precio)||0;
+    if (it.stockId) {
+      const st = (stock||[]).find(function(s){return s.id===it.stockId;});
+      if (st && parseFloat(st.precio)>0 && st.costo!=null) return {costo: precio*(parseFloat(st.costo)/parseFloat(st.precio)), coincidio:true};
+    }
+    return estimarCostoItem(it, molduras, insumos, stock);
+  }
+
+  const filasPOSPorMes = React.useMemo(function() {
+    const mapa = {};
+    ventasPOSFiltradas.forEach(function(v){
+      const mes = (v.fecha||"").slice(0,7);
+      if (!mes) return;
+      if (!mapa[mes]) mapa[mes] = {mes:mes, ventas:0, ingreso:0, costo:0};
+      const items = parsearJSON(v.items);
+      let ingV=0, costoV=0;
+      items.forEach(function(it){ const precio=parseFloat(it.precio)||0; ingV+=precio; const r=utilidadItemPOS(it); if (r.coincidio) costoV+=r.costo; });
+      mapa[mes].ventas++; mapa[mes].ingreso+=ingV; mapa[mes].costo+=costoV;
+    });
+    return Object.values(mapa).map(function(m){ return Object.assign({},m,{utilidad:m.ingreso-m.costo, margen: m.ingreso>0?((m.ingreso-m.costo)/m.ingreso)*100:0}); }).sort(function(a,b){ return a.mes.localeCompare(b.mes); });
+  }, [ventasPOSFiltradas, stock, molduras, insumos]);
+
+  const filasProductos = React.useMemo(function() {
+    const mapa = {};
+    pedidosFiltrados.forEach(function(p){
+      gruposProducto(p).forEach(function(g){
+        const cant = parseFloat(g.cantidad)||1;
+        (g.items||[]).forEach(function(it){
+          const key = it.nombre || "Sin nombre";
+          if (!mapa[key]) mapa[key] = {nombre:key, unidades:0, ingreso:0, canal:"Pedidos"};
+          mapa[key].unidades += cant; mapa[key].ingreso += (parseFloat(it.precio)||0)*cant;
+        });
+      });
+    });
+    ventasPOSFiltradas.forEach(function(v){
+      parsearJSON(v.items).forEach(function(it){
+        const key = it.nombre || "Sin nombre";
+        if (!mapa[key]) mapa[key] = {nombre:key, unidades:0, ingreso:0, canal:"POS"};
+        mapa[key].unidades += 1; mapa[key].ingreso += parseFloat(it.precio)||0;
+        if (mapa[key].canal==="Pedidos") mapa[key].canal="Pedidos+POS";
+      });
+    });
+    return Object.values(mapa).sort(function(a,b){ return b.ingreso-a.ingreso; });
+  }, [pedidosFiltrados, ventasPOSFiltradas]);
+
+  const canalMix = React.useMemo(function() {
+    let enmarcado=0, productosPedidos=0;
+    filasPedidos.forEach(function(f){ if (f.esEnmarcado) enmarcado+=f.ingreso; else productosPedidos+=f.ingreso; });
+    const pos = ventasPOSFiltradas.reduce(function(s,v){ return s+totI(v.items); }, 0);
+    return [
+      {label:"Pedidos Enmarcado", value:enmarcado, color:T.amber},
+      {label:"Pedidos Productos", value:productosPedidos, color:T.blue},
+      {label:"Ventas POS", value:pos, color:T.green}
+    ];
+  }, [filasPedidos, ventasPOSFiltradas]);
+
+  const REPORTES = [
+    {id:"pedidos_utilidad", label:"Pedidos — Utilidad"},
+    {id:"utilidad_cliente", label:"Utilidad por Cliente"},
+    {id:"pos_utilidad_mes", label:"POS — Utilidad por Mes"},
+    {id:"venta_productos", label:"Venta de Productos"},
+    {id:"mix_canal", label:"% Ventas por Canal"}
+  ];
+
+  const etiquetaRango = modoFecha==="mes_actual" ? "Mes actual" : modoFecha==="mes_anterior" ? "Mes anterior" : modoFecha==="anio_actual" ? "Año actual" : modoFecha==="personalizado" ? (rango.desde+" a "+rango.hasta) : "Todo el histórico";
+  const subtituloExport = etiquetaRango + (filtroCliente ? " · Cliente: "+filtroCliente : "");
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end",marginBottom:16,background:T.bgCard,border:"1px solid "+T.border,borderRadius:9,padding:"12px 14px"}}>
+        <div>
+          <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginBottom:4,fontWeight:600}}>REPORTE</div>
+          <select value={tipoReporte} onChange={function(e){setTipoReporte(e.target.value);}} style={{padding:"7px 10px",borderRadius:6,border:"1px solid "+T.border,fontFamily:FS,fontSize:12,minWidth:180}}>
+            {REPORTES.map(function(r){ return <option key={r.id} value={r.id}>{r.label}</option>; })}
+          </select>
+        </div>
+        <div>
+          <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginBottom:4,fontWeight:600}}>PERIODO</div>
+          <select value={modoFecha} onChange={function(e){setModoFecha(e.target.value);}} style={{padding:"7px 10px",borderRadius:6,border:"1px solid "+T.border,fontFamily:FS,fontSize:12}}>
+            <option value="mes_actual">Mes actual</option>
+            <option value="mes_anterior">Mes anterior</option>
+            <option value="anio_actual">Año actual</option>
+            <option value="personalizado">Personalizado</option>
+            <option value="todo">Todo</option>
+          </select>
+        </div>
+        {modoFecha==="personalizado" && (
+          <React.Fragment>
+            <div><div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginBottom:4,fontWeight:600}}>DESDE</div><input type="date" value={fechaDesde} onChange={function(e){setFechaDesde(e.target.value);}} style={{padding:"6px 9px",borderRadius:6,border:"1px solid "+T.border,fontFamily:FS,fontSize:12}}/></div>
+            <div><div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginBottom:4,fontWeight:600}}>HASTA</div><input type="date" value={fechaHasta} onChange={function(e){setFechaHasta(e.target.value);}} style={{padding:"6px 9px",borderRadius:6,border:"1px solid "+T.border,fontFamily:FS,fontSize:12}}/></div>
+          </React.Fragment>
+        )}
+        <div style={{flex:1,minWidth:160}}>
+          <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginBottom:4,fontWeight:600}}>CLIENTE</div>
+          <input type="text" placeholder="Todos los clientes..." value={filtroCliente} onChange={function(e){setFiltroCliente(e.target.value);}} list="lista-clientes-reportes" style={{padding:"7px 10px",borderRadius:6,border:"1px solid "+T.border,fontFamily:FS,fontSize:12,width:"100%"}}/>
+          <datalist id="lista-clientes-reportes">
+            {(clientes||[]).map(function(c,i){ return <option key={i} value={c.nombre}/>; })}
+          </datalist>
+        </div>
+      </div>
+
+      {tipoReporte === "pedidos_utilidad" && (
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <ST>Pedidos — Utilidad ({etiquetaRango})</ST>
+            <button onClick={function(){
+              const headers=["Folio","Cliente","Fecha","Ingreso","Costo est.","Utilidad","Margen"];
+              const filas=filasPedidos.map(function(f){return [f.folio,f.cliente,fmtD(f.fecha),fmt(f.ingreso),fmt(f.costo),fmt(f.utilidad),f.margen.toFixed(1)+"%"];});
+              const totalRow=["","","TOTAL",fmt(totalesPedidos.ingreso),fmt(totalesPedidos.costo),fmt(totalesPedidos.utilidad),""];
+              exportarReportePDF("Pedidos — Utilidad", subtituloExport, headers, filas, totalRow);
+            }} style={{background:T.header,color:"#fff",border:"none",borderRadius:6,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:FS}}>📄 Exportar PDF</button>
+          </div>
+          {filasPedidos.length === 0 ? <div style={{color:T.textFade,fontSize:12,fontFamily:FS,padding:"20px 0",textAlign:"center"}}>No hay pedidos en este periodo.</div> : (
+            <React.Fragment>
+              <Card style={{marginBottom:14}}>
+                <MiniBarChart data={filasPedidos.slice(0,15).map(function(f){return {label:"#"+f.folio, value:f.utilidad};})} color={T.green}/>
+              </Card>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontFamily:FS,fontSize:12}}>
+                  <thead><tr style={{background:T.bgDark}}>
+                    {["Folio","Cliente","Fecha","Ingreso","Costo est.","Utilidad","Margen","Cobertura"].map(function(h){return <th key={h} style={{padding:"7px 9px",textAlign:"left",fontSize:10,color:T.textFade,fontWeight:600}}>{h}</th>;})}
+                  </tr></thead>
+                  <tbody>
+                    {filasPedidos.map(function(f){
+                      return (
+                        <tr key={f.folio} style={{borderBottom:"1px solid "+T.border}}>
+                          <td style={{padding:"6px 9px",fontWeight:700}}>#{f.folio}</td>
+                          <td style={{padding:"6px 9px"}}>{f.cliente}</td>
+                          <td style={{padding:"6px 9px",color:T.textFade}}>{fmtD(f.fecha)}</td>
+                          <td style={{padding:"6px 9px"}}>{fmt(f.ingreso)}</td>
+                          <td style={{padding:"6px 9px",color:T.orange}}>{fmt(f.costo)}</td>
+                          <td style={{padding:"6px 9px",fontWeight:700,color:f.utilidad>=0?T.green:T.red}}>{fmt(f.utilidad)}</td>
+                          <td style={{padding:"6px 9px"}}>{f.margen.toFixed(1)}%</td>
+                          <td style={{padding:"6px 9px",color:f.cobertura<50?T.orange:T.textFade,fontSize:10}}>{f.cobertura.toFixed(0)}%</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot><tr style={{background:T.bgDark,fontWeight:700}}>
+                    <td style={{padding:"9px"}} colSpan={3}>TOTAL</td>
+                    <td style={{padding:"9px"}}>{fmt(totalesPedidos.ingreso)}</td>
+                    <td style={{padding:"9px",color:T.orange}}>{fmt(totalesPedidos.costo)}</td>
+                    <td style={{padding:"9px",color:totalesPedidos.utilidad>=0?T.green:T.red}}>{fmt(totalesPedidos.utilidad)}</td>
+                    <td colSpan={2}></td>
+                  </tr></tfoot>
+                </table>
+              </div>
+              <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginTop:8,fontStyle:"italic"}}>* Costo estimado comparando cada item contra el catálogo de molduras/insumos/stock. "Cobertura" indica qué % del pedido tuvo un costo de referencia encontrado.</div>
+            </React.Fragment>
+          )}
+        </div>
+      )}
+
+      {tipoReporte === "utilidad_cliente" && (
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <ST>Utilidad por Cliente ({etiquetaRango})</ST>
+            <button onClick={function(){
+              const headers=["Cliente","Pedidos","Ingreso","Costo est.","Utilidad","Margen","Ticket prom."];
+              const filas=filasClientes.map(function(c){return [c.cliente,c.pedidos,fmt(c.ingreso),fmt(c.costo),fmt(c.utilidad),c.margen.toFixed(1)+"%",fmt(c.ticket)];});
+              exportarReportePDF("Utilidad por Cliente", subtituloExport, headers, filas);
+            }} style={{background:T.header,color:"#fff",border:"none",borderRadius:6,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:FS}}>📄 Exportar PDF</button>
+          </div>
+          {filasClientes.length === 0 ? <div style={{color:T.textFade,fontSize:12,fontFamily:FS,padding:"20px 0",textAlign:"center"}}>No hay datos en este periodo.</div> : (
+            <React.Fragment>
+              <Card style={{marginBottom:14}}>
+                <MiniBarChart data={filasClientes.slice(0,10).map(function(c){return {label:c.cliente, value:c.utilidad};})} color={T.amber}/>
+              </Card>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontFamily:FS,fontSize:12}}>
+                  <thead><tr style={{background:T.bgDark}}>
+                    {["Cliente","Pedidos","Ingreso","Costo est.","Utilidad","Margen","Ticket prom."].map(function(h){return <th key={h} style={{padding:"7px 9px",textAlign:"left",fontSize:10,color:T.textFade,fontWeight:600}}>{h}</th>;})}
+                  </tr></thead>
+                  <tbody>
+                    {filasClientes.map(function(c){
+                      return (
+                        <tr key={c.cliente} style={{borderBottom:"1px solid "+T.border}}>
+                          <td style={{padding:"6px 9px",fontWeight:700}}>{c.cliente}</td>
+                          <td style={{padding:"6px 9px"}}>{c.pedidos}</td>
+                          <td style={{padding:"6px 9px"}}>{fmt(c.ingreso)}</td>
+                          <td style={{padding:"6px 9px",color:T.orange}}>{fmt(c.costo)}</td>
+                          <td style={{padding:"6px 9px",fontWeight:700,color:c.utilidad>=0?T.green:T.red}}>{fmt(c.utilidad)}</td>
+                          <td style={{padding:"6px 9px"}}>{c.margen.toFixed(1)}%</td>
+                          <td style={{padding:"6px 9px",color:T.textFade}}>{fmt(c.ticket)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </React.Fragment>
+          )}
+        </div>
+      )}
+
+      {tipoReporte === "pos_utilidad_mes" && (
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <ST>POS — Utilidad por Mes ({etiquetaRango})</ST>
+            <button onClick={function(){
+              const headers=["Mes","Ventas","Ingreso","Costo est.","Utilidad","Margen"];
+              const filas=filasPOSPorMes.map(function(m){return [m.mes,m.ventas,fmt(m.ingreso),fmt(m.costo),fmt(m.utilidad),m.margen.toFixed(1)+"%"];});
+              exportarReportePDF("POS — Utilidad por Mes", subtituloExport, headers, filas);
+            }} style={{background:T.header,color:"#fff",border:"none",borderRadius:6,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:FS}}>📄 Exportar PDF</button>
+          </div>
+          {filasPOSPorMes.length === 0 ? <div style={{color:T.textFade,fontSize:12,fontFamily:FS,padding:"20px 0",textAlign:"center"}}>No hay ventas POS en este periodo.</div> : (
+            <React.Fragment>
+              <Card style={{marginBottom:14}}>
+                <MiniBarChart data={filasPOSPorMes.map(function(m){return {label:m.mes, value:m.utilidad};})} color={T.blue}/>
+              </Card>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontFamily:FS,fontSize:12}}>
+                  <thead><tr style={{background:T.bgDark}}>
+                    {["Mes","Ventas","Ingreso","Costo est.","Utilidad","Margen"].map(function(h){return <th key={h} style={{padding:"7px 9px",textAlign:"left",fontSize:10,color:T.textFade,fontWeight:600}}>{h}</th>;})}
+                  </tr></thead>
+                  <tbody>
+                    {filasPOSPorMes.map(function(m){
+                      return (
+                        <tr key={m.mes} style={{borderBottom:"1px solid "+T.border}}>
+                          <td style={{padding:"6px 9px",fontWeight:700}}>{m.mes}</td>
+                          <td style={{padding:"6px 9px"}}>{m.ventas}</td>
+                          <td style={{padding:"6px 9px"}}>{fmt(m.ingreso)}</td>
+                          <td style={{padding:"6px 9px",color:T.orange}}>{fmt(m.costo)}</td>
+                          <td style={{padding:"6px 9px",fontWeight:700,color:m.utilidad>=0?T.green:T.red}}>{fmt(m.utilidad)}</td>
+                          <td style={{padding:"6px 9px"}}>{m.margen.toFixed(1)}%</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{fontSize:10,color:T.textFade,fontFamily:FS,marginTop:8,fontStyle:"italic"}}>* Ventas POS de mostrador (con producto en Inventario) usan su costo real. Ventas importadas de otro sistema sin costo de referencia se cuentan solo en ingreso.</div>
+            </React.Fragment>
+          )}
+        </div>
+      )}
+
+      {tipoReporte === "venta_productos" && (
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <ST>Venta de Productos ({etiquetaRango})</ST>
+            <button onClick={function(){
+              const headers=["Producto","Canal","Unidades","Ingreso"];
+              const filas=filasProductos.map(function(p){return [p.nombre,p.canal,p.unidades,fmt(p.ingreso)];});
+              exportarReportePDF("Venta de Productos", subtituloExport, headers, filas);
+            }} style={{background:T.header,color:"#fff",border:"none",borderRadius:6,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:FS}}>📄 Exportar PDF</button>
+          </div>
+          {filasProductos.length === 0 ? <div style={{color:T.textFade,fontSize:12,fontFamily:FS,padding:"20px 0",textAlign:"center"}}>No hay ventas en este periodo.</div> : (
+            <React.Fragment>
+              <Card style={{marginBottom:14}}>
+                <MiniBarChart data={filasProductos.slice(0,15).map(function(p){return {label:p.nombre, value:p.ingreso};})} color={T.amber}/>
+              </Card>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontFamily:FS,fontSize:12}}>
+                  <thead><tr style={{background:T.bgDark}}>
+                    {["Producto","Canal","Unidades","Ingreso"].map(function(h){return <th key={h} style={{padding:"7px 9px",textAlign:"left",fontSize:10,color:T.textFade,fontWeight:600}}>{h}</th>;})}
+                  </tr></thead>
+                  <tbody>
+                    {filasProductos.map(function(p,i){
+                      return (
+                        <tr key={i} style={{borderBottom:"1px solid "+T.border}}>
+                          <td style={{padding:"6px 9px",fontWeight:700}}>{p.nombre}</td>
+                          <td style={{padding:"6px 9px",color:T.textFade,fontSize:11}}>{p.canal}</td>
+                          <td style={{padding:"6px 9px"}}>{p.unidades}</td>
+                          <td style={{padding:"6px 9px",fontWeight:700,color:T.amber}}>{fmt(p.ingreso)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </React.Fragment>
+          )}
+        </div>
+      )}
+
+      {tipoReporte === "mix_canal" && (
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <ST>% de Ventas por Canal ({etiquetaRango})</ST>
+            <button onClick={function(){
+              const total = canalMix.reduce(function(s,c){return s+c.value;},0)||1;
+              const headers=["Canal","Monto","%"];
+              const filas=canalMix.map(function(c){return [c.label,fmt(c.value),((c.value/total)*100).toFixed(1)+"%"];});
+              exportarReportePDF("% de Ventas por Canal", subtituloExport, headers, filas);
+            }} style={{background:T.header,color:"#fff",border:"none",borderRadius:6,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:FS}}>📄 Exportar PDF</button>
+          </div>
+          <Card>
+            <MiniPieChart data={canalMix}/>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TabDashboard({pedidos, cotizaciones, costos, gastos, stock, ventasPOS}) {
   const anoActual = new Date().getFullYear();
   const [mesFiltro, setMesFiltro] = useState("todos");
@@ -5753,6 +6264,7 @@ function TabClientes({clientes, setClientes, pedidos}) {
 
 const TABS = [
   {id:"dashboard",label:"Dashboard",icon:"📊",color:"#1565C0",desc:"KPIs y resumen general"},
+  {id:"reportes",label:"Reportes",icon:"📑",color:"#4527A0",desc:"Reporteador: utilidad, clientes, productos, POS"},
   {id:"cotizador",label:"Nuevo Pedido",icon:"🧾",color:"#6A1B9A",desc:"Crear pedido o cotización: calculadora + stock"},
   {id:"cotizaciones",label:"Cotizaciones",icon:"📋",color:"#0277BD",desc:"Cotizaciones pendientes y aceptadas"},
   {id:"pedidos",label:"Pedidos",icon:"📦",color:"#E65100",desc:"Captura y gestión de notas de venta"},
@@ -5955,6 +6467,10 @@ function App() {
   const recargandoRemoto = React.useRef(false);
   const wsRef = React.useRef(null);
   const pedidosCargadosCount = React.useRef(0);
+  // Notificacion de pedidos nuevos creados desde otra PC (polling cada 60s)
+  const foliosConocidos = React.useRef(null); // Set de folios que ya conocemos; null hasta la 1a carga
+  const [avisoPedidos, setAvisoPedidos] = useState(null); // {cantidad, folios:[...]} o null
+  const notifPreguntada = React.useRef(false);
 
   // Asigna IDs únicos a registros que no lo tengan (NO elimina duplicados:
   // dos gastos pueden tener mismos datos y ser legítimamente distintos)
@@ -6001,6 +6517,8 @@ function App() {
           const todos = pedidosSheets.concat(histFiltrados);
           setPedidos(todos);
           pedidosCargadosCount.current = todos.length;
+          // Registrar folios conocidos (para detectar pedidos nuevos de otras PCs)
+          foliosConocidos.current = new Set(todos.map(function(p){ return String(p.folio); }));
           const fs = todos.map(function(p) { return parseInt(p.folio) || 0; });
           setNextFolioBase(Math.max.apply(null, fs) + 1);
         } else if (!esRemoto && typeof PEDIDOS_HIST !== "undefined" && PEDIDOS_HIST.length > 0) {
@@ -6052,6 +6570,49 @@ function App() {
 
   React.useEffect(function() {
     cargarDatos(false);
+  }, []);
+
+  // ─── Notificación de pedidos nuevos (polling cada 60s) ───
+  // Consulta el Sheet solo para comparar folios de pedidos. Si aparecen folios
+  // que no conocíamos (creados desde otra PC/celular), avisa — sin tocar los
+  // datos locales ni recargar nada. El usuario decide cuándo actualizar.
+  React.useEffect(function() {
+    // Pedir permiso de notificaciones del navegador una sola vez
+    if (typeof Notification !== "undefined" && Notification.permission === "default" && !notifPreguntada.current) {
+      notifPreguntada.current = true;
+      try { Notification.requestPermission(); } catch(e) {}
+    }
+
+    const intervalo = setInterval(function() {
+      // No revisar hasta que la 1a carga haya establecido los folios base
+      if (!foliosConocidos.current) return;
+      fetch(API_URL + "?accion=leer_todo")
+        .then(function(r){ return r.json(); })
+        .then(function(resp){
+          const data = resp && resp.ok && resp.data ? resp.data : {};
+          if (!data.pedidos || !data.pedidos.length) return;
+          const foliosRemotos = data.pedidos.map(function(p){ return String(p.folio); });
+          const nuevos = foliosRemotos.filter(function(f){ return !foliosConocidos.current.has(f); });
+          if (nuevos.length > 0) {
+            // Marcar como conocidos para no volver a avisar de los mismos
+            nuevos.forEach(function(f){ foliosConocidos.current.add(f); });
+            setAvisoPedidos({ cantidad: nuevos.length, folios: nuevos });
+            // Notificación del navegador (aunque esté en otra pestaña)
+            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+              try {
+                const titulo = nuevos.length === 1 ? "Nuevo pedido" : nuevos.length + " pedidos nuevos";
+                const cuerpo = nuevos.length === 1
+                  ? "Se registró el pedido #" + nuevos[0] + " desde otro equipo."
+                  : "Se registraron los pedidos #" + nuevos.slice(0,5).join(", #") + (nuevos.length>5?"…":"") + " desde otro equipo.";
+                new Notification(titulo, { body: cuerpo, tag: "pedidos-nuevos", requireInteraction: false });
+              } catch(e) {}
+            }
+          }
+        })
+        .catch(function(){ /* silencioso: si falla el poll, no molestar */ });
+    }, 60000);
+
+    return function(){ clearInterval(intervalo); };
   }, []);
 
   // ─── WebSocket: recarga automática cuando otra PC guarda cambios ───
@@ -6232,6 +6793,23 @@ function App() {
           <div style={{color:"rgba(255,255,255,0.45)",fontSize:10,fontFamily:FS,marginTop:4}}>Jose Ma. Morelos 745 Nte. · Culiacan · <u title="Requiere estar en la cuenta de Google que controla la base de datos">Acct: Google conectada</u></div>
         </div>
       </div>
+      {avisoPedidos && (
+        <div style={{background:"#FFF8E0",borderBottom:"2px solid "+T.amber,padding:"10px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,fontFamily:FS}}>
+            <span style={{fontSize:18}}>🔔</span>
+            <span style={{fontSize:13,color:T.text,fontWeight:600}}>
+              {avisoPedidos.cantidad === 1
+                ? "Hay 1 pedido nuevo (#"+avisoPedidos.folios[0]+") registrado desde otro equipo."
+                : "Hay "+avisoPedidos.cantidad+" pedidos nuevos registrados desde otro equipo."}
+              <span style={{fontWeight:400,color:T.textSub}}> Recarga la página para verlos.</span>
+            </span>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <button onClick={() => window.location.reload()} style={{background:T.header,color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:FS}}>Actualizar</button>
+            <button onClick={() => setAvisoPedidos(null)} style={{background:"none",border:"none",color:T.textFade,fontSize:18,cursor:"pointer",lineHeight:1,padding:"0 4px"}} title="Descartar">×</button>
+          </div>
+        </div>
+      )}
       {tab !== "home" && (
         <div style={{display:"flex",overflowX:"auto",borderBottom:"2px solid "+T.border,background:T.bgCard,padding:"0 12px"}}>
           {TABS.map(function(t) {
@@ -6281,6 +6859,7 @@ function App() {
           </div>
         )}
         {tab==="dashboard" && <ErrorBoundary><TabDashboard pedidos={pedidos} cotizaciones={cotizaciones} costos={costos} gastos={gastos} stock={stock} ventasPOS={ventasPOS}/></ErrorBoundary>}
+        {tab==="reportes" && <ErrorBoundary><TabReportes pedidos={pedidos} ventasPOS={ventasPOS} clientes={clientes} molduras={molduras} insumos={insumos} stock={stock}/></ErrorBoundary>}
         {tab==="cotizador" && <ErrorBoundary><TabCotizador insumos={insumos} molduras={molduras} nextFolio={nextFolioS} setNextFolio={setNextFolio} nextFolioQ={nextFolioQ} setNextFolioQ={setNextFolioQ} onPedidoCreado={agregarPedido} onCotizacionCreada={agregarCot} setCotizadorDirty={setCotizadorDirty} stock={stock} cotizacionAEditar={cotizacionAEditar} onLimpiarEdicion={() => setCotizacionAEditar(null)} setCotizaciones={setCotizaciones} pedidoAEditar={pedidoAEditar} onLimpiarEdicionPedido={() => setPedidoAEditar(null)} setPedidos={setPedidos} clientes={clientes} setClientes={setClientes}/></ErrorBoundary>}
         {tab==="cotizaciones" && <ErrorBoundary><TabCotizaciones cotizaciones={cotizaciones} setCotizaciones={setCotizaciones} onConvertir={convertirCot} nextFolio={nextFolioS} onModificar={(c) => { setCotizacionAEditar(c); setTab("cotizador"); }}/></ErrorBoundary>}
         {tab==="pedidos" && <ErrorBoundary><TabPedidos pedidos={pedidos} setPedidos={setPedidos} nextFolio={nextFolioS} setNextFolio={setNextFolio} stock={stock} onNuevoPedido={() => setTab("cotizador")} onEditarConstructor={(p) => { setPedidoAEditar(p); setTab("cotizador"); }}/></ErrorBoundary>}
