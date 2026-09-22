@@ -593,7 +593,7 @@ function generarPDF({folio, tipo, cliente, clienteTel, clienteCorreo, fecha, fec
     let descripcionFila = "";
 
     if (tipoP === "cuadro") {
-      nombreFila = "CUADRO " + num;
+      nombreFila = "Cuadro " + num;
       let moldura = "";
       const insumos = [];
       if (itemsProd.length > 0 && itemsProd.some(function(it){return it.tipo;})) {
@@ -619,7 +619,7 @@ function generarPDF({folio, tipo, cliente, clienteTel, clienteCorreo, fecha, fec
       if (insumos.length) partesDesc.push(insumos.join(", "));
       descripcionFila = partesDesc.join(" · ");
     } else {
-      nombreFila = (tipoP === "bastidor" ? "BASTIDOR" : "CARTEL") + " " + num;
+      nombreFila = (tipoP === "bastidor" ? "Bastidor" : "Cartel") + " " + num;
       descripcionFila = "";
     }
 
@@ -628,7 +628,8 @@ function generarPDF({folio, tipo, cliente, clienteTel, clienteCorreo, fecha, fec
     // 2: Descripción molduras e insumos sin precios
     // 3: Imagen miniatura
     // Nota del cliente (si tiene)
-    const renglon1 = '<div style="font-weight:700;font-size:11.5px">'+nombreFila + (medidasFinal ? ' — '+medidasFinal : '')+'</div>';
+    const renglon1 = '<div style="font-weight:700;font-size:11.5px">'+nombreFila+'</div>' +
+      (medidasFinal ? '<div style="font-size:10.5px;margin-top:2px;color:#222">'+medidasFinal+'</div>' : '');
     const renglon2 = descripcionFila ? '<div style="color:#555;font-size:10.5px;margin-top:3px;line-height:1.35">'+descripcionFila+'</div>' : '';
     const renglon3 = prod.imagen ? '<div style="margin-top:5px"><img src="'+prod.imagen+'" style="width:54px;height:54px;object-fit:cover;border:1px solid #bbb;border-radius:3px"/></div>' : '';
     const notaHTML = prod.nota ? '<div style="font-size:9.5px;color:#888;font-style:italic;margin-top:3px">Nota: '+prod.nota+'</div>' : '';
