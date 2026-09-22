@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.0/dist/umd/supabase.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -20,6 +21,244 @@ input, select, button { font-family: inherit; }
 </head>
 <body>
 <div id="root"></div>
+<script>
+// ══════════════════════════════════════════════════════════════
+//  CAPA DE DATOS — SUPABASE (reemplaza Google Sheets + Apps Script)
+//  Guarda SOLO lo que cambió (fila por fila), en vez de reescribir todo.
+// ══════════════════════════════════════════════════════════════
+var SUPABASE_URL = "https://aucmgezrifmixladsjdt.supabase.co";
+var SUPABASE_KEY = "sb_publishable_-U53S8qwrY2KEFsD4RwC0g_xx__-8sK";
+var BUCKET_IMG   = "imagenes-pedidos";
+var SB = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true }
+});
+var USUARIO_ACTUAL = null;   // {id, email, nombre, rol}
+var CARGA_OK = false;        // no se guarda nada si la carga inicial falló
+var SNAP = {};               // tabla -> Map(id -> firma de la fila tal como está en la BD)
+
+// Mapa app (camelCase) -> columna BD. Tipos: t=texto d=fecha n=número(nullable) n0=número(0 si vacío) j=json
+var MAPA = {
+  pedidos: [["id","id","t"],["folio","folio","t"],["fecha","fecha","d"],["fechaEntrega","fecha_entrega","d"],["cliente","cliente","t"],
+    ["estado","estado","t"],["metodoPago","metodo_pago","t"],["anticipo","anticipo","n0"],["items","items","j"],["productos","productos","j"],
+    ["nota","nota","t"],["tareas","tareas","j"],["imagen","imagen","t"],["total","total","n0"],["saldo","saldo","n0"],["tel","tel","t"],
+    ["descuento","descuento","n0"],["fechaSaldo","fecha_saldo","d"],["ultimoPago","ultimo_pago","j"],["fechaAnticipo","fecha_anticipo","d"],
+    ["descuentoPct","descuento_pct","n0"]],
+  cotizaciones: [["id","id","t"],["folio","folio","t"],["cliente","cliente","t"],["tel","tel","t"],["validez","validez","d"],["nota","nota","t"],
+    ["items","items","j"],["productos","productos","j"],["total","total","n0"],["descuentoPct","descuento_pct","n0"],["estado","estado","t"],
+    ["fecha","fecha","d!"],["fechaEntrega","fecha_entrega","d"]],
+  ventas_pos: [["id","id","t"],["folio","folio","t"],["cliente","cliente","t"],["tel","tel","t"],["items","items","j"],["anticipo","anticipo","n0"],
+    ["metodoPago","metodo_pago","t"],["estado","estado","t"],["nota","nota","t"],["imagen","imagen","t"],["fecha","fecha","d!"]],
+  costos: [["id","id","t"],["concepto","concepto","t"],["categoria","categoria","t"],["monto","monto","n0"],["fecha","fecha","d!"],["proveedor","proveedor","t"],["nota","nota","t"]],
+  gastos: [["id","id","t"],["concepto","concepto","t"],["categoria","categoria","t"],["monto","monto","n0"],["fecha","fecha","d!"],["proveedor","proveedor","t"],["nota","nota","t"]],
+  clientes: [["id","id","t"],["nombre","nombre","t"],["telefono","telefono","t"],["rfc","rfc","t"],["direccion","direccion","t"],["cp","cp","t"],
+    ["regimen","regimen","t"],["usoFactura","uso_factura","t"],["descuento","descuento","n0"]],
+  categorias_registro: [["id","id","t"],["nombre","nombre","t"],["tipo","tipo","t"]],
+  proveedores_registro: [["id","id","t"],["nombre","nombre","t"]],
+  temas: [["id","id","t"],["nombre","nombre","t"]],
+  stock: [["id","id","t"],["nombre","nombre","t"],["categoria","categoria","t"],["alto","alto","n"],["ancho","ancho","n"],["medidas","medidas","t"],
+    ["precio","precio","n0"],["costo","costo","n0"],["stockMin","stock_min","n0"],["composicion","composicion","j"],["temas","temas","j"],
+    ["tema","tema","t"],["stock","stock","n"]],
+  insumos: [["id","id","t"],["nombre","nombre","t"],["cat","cat","t"],["costo","costo","n0"],["margen","margen","n0"],["precio","precio","n0"]],
+  molduras: [["id","id","t"],["nombre","nombre","t"],["costo_ml","costo_ml","n0"],["margen","margen","n0"],["precio_ml","precio_ml","n0"],["desperdicio","desperdicio","n0"]]
+};
+var TABLAS = Object.keys(MAPA);
+
+function hoyLocalSB() { var d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+
+// App -> fila BD
+function aDb(tabla, o) {
+  var row = {};
+  MAPA[tabla].forEach(function(c){
+    var v = o[c[0]], tipo = c[2];
+    if (tipo === "t") row[c[1]] = (v === null || v === undefined) ? "" : String(v);
+    else if (tipo === "n" || tipo === "n0") {
+      var n = (v === null || v === undefined || v === "") ? NaN : parseFloat(v);
+      row[c[1]] = isNaN(n) ? (tipo === "n0" ? 0 : null) : n;
+    }
+    else if (tipo === "d" || tipo === "d!") {
+      var s = (v === null || v === undefined) ? "" : String(v).slice(0,10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) s = null;
+      row[c[1]] = s || (tipo === "d!" ? hoyLocalSB() : null);
+    }
+    else if (tipo === "j") {
+      if (typeof v === "string") { try { v = JSON.parse(v); } catch(e) { v = null; } }
+      row[c[1]] = (v === undefined) ? null : v;
+    }
+  });
+  return row;
+}
+// Fila BD -> App (vacíos como "" igual que llegaban de Sheets)
+function deDb(tabla, r) {
+  var o = {};
+  MAPA[tabla].forEach(function(c){
+    var v = r[c[1]];
+    o[c[0]] = (c[2] === "j") ? (v === undefined ? null : v) : ((v === null || v === undefined) ? "" : v);
+  });
+  return o;
+}
+// Mismo "limpiado" que se hacía antes de mandar a Sheets
+function prepararApp(tabla, o) {
+  if (tabla !== "pedidos") return o;
+  var p = normalizarPedido(o);
+  var prods = parsearJSON(p.productos);
+  var limpios = Array.isArray(prods) ? prods.map(function(pr){
+    if (!pr || typeof pr !== "object") return pr;
+    var out = Object.assign({}, pr);
+    if (typeof out.imagen === "string" && out.imagen.indexOf("data:") === 0) out.imagen = null;
+    if (typeof out.imagenDrive === "string" && out.imagenDrive.indexOf("data:") === 0) out.imagenDrive = null;
+    delete out.subiendo;
+    return out;
+  }) : prods;
+  return Object.assign({}, p, {imagen:null, productos:limpios, total:calcularTotal(p), saldo:calcularSaldo(p)});
+}
+// Firma estable (ordena llaves: jsonb de Postgres reordena)
+function estable(v) {
+  if (Array.isArray(v)) return "[" + v.map(estable).join(",") + "]";
+  if (v && typeof v === "object") return "{" + Object.keys(v).sort().map(function(k){ return JSON.stringify(k)+":"+estable(v[k]); }).join(",") + "}";
+  return JSON.stringify(v === undefined ? null : v);
+}
+function firma(tabla, oApp) { return estable(aDb(tabla, prepararApp(tabla, oApp))); }
+
+// ─── LECTURA (paginada: Supabase entrega máx. 1000 filas por consulta) ───
+async function leerTabla(tabla) {
+  var todas = [], desde = 0, lote = 1000;
+  while (true) {
+    var res = await SB.from(tabla).select("*").order("id").range(desde, desde + lote - 1);
+    if (res.error) throw new Error(tabla + ": " + res.error.message);
+    todas = todas.concat(res.data || []);
+    if (!res.data || res.data.length < lote) break;
+    desde += lote;
+  }
+  return todas;
+}
+async function leerTodo() {
+  try {
+    var resultados = await Promise.all(TABLAS.map(leerTabla));
+    var data = {};
+    TABLAS.forEach(function(t, i){
+      var objs = resultados[i].map(function(r){ return deDb(t, r); });
+      var snap = new Map();
+      objs.forEach(function(o){ snap.set(String(o.id), firma(t, o)); });
+      SNAP[t] = snap;
+      data[t] = objs;
+    });
+    CARGA_OK = true;
+    return {ok:true, data:data};
+  } catch (e) {
+    console.error("Error cargando Supabase:", e);
+    CARGA_OK = false;
+    return {ok:false, error:e.message};
+  }
+}
+
+// ─── GUARDADO: solo filas nuevas/modificadas + borradas ───
+async function sincronizarTodo(col) {
+  if (!CARGA_OK) return {ok:false, error:"Carga incompleta, no se guardó"};
+  var errores = [], cambios = 0;
+  for (var ti = 0; ti < TABLAS.length; ti++) {
+    var tabla = TABLAS[ti];
+    if (!col[tabla]) continue;
+    var snap = SNAP[tabla] || (SNAP[tabla] = new Map());
+    var actuales = new Map();
+    col[tabla].forEach(function(o){
+      if (!o || o.id === null || o.id === undefined || o.id === "") return;
+      var row = aDb(tabla, prepararApp(tabla, o));
+      actuales.set(String(row.id), row);
+    });
+    // Borrados (primero, para liberar folios reutilizados)
+    var borrar = [];
+    snap.forEach(function(s, id){ if (!actuales.has(id)) borrar.push(id); });
+    if (borrar.length > 5 && borrar.length > snap.size * 0.3) {
+      console.warn("Borrado masivo bloqueado en " + tabla + ": " + borrar.length + " de " + snap.size);
+      errores.push(tabla + ": borrado masivo bloqueado");
+      borrar = [];
+    }
+    for (var b = 0; b < borrar.length; b += 200) {
+      var idsB = borrar.slice(b, b + 200);
+      var prevB = idsB.map(function(id){ return [id, snap.get(id)]; });
+      idsB.forEach(function(id){ snap.delete(id); });
+      var rb = await SB.from(tabla).delete().in("id", idsB);
+      if (rb.error) { prevB.forEach(function(x){ snap.set(x[0], x[1]); }); errores.push(tabla + ": " + rb.error.message); }
+      else cambios += idsB.length;
+    }
+    // Altas y cambios
+    var ups = [];
+    actuales.forEach(function(row, id){
+      var s = estable(row);
+      if (snap.get(id) !== s) ups.push({id:id, row:row, s:s, prev:snap.get(id)});
+    });
+    for (var u = 0; u < ups.length; u += 200) {
+      var lote = ups.slice(u, u + 200);
+      lote.forEach(function(x){ snap.set(x.id, x.s); });
+      var ru = await SB.from(tabla).upsert(lote.map(function(x){ return x.row; }));
+      if (ru.error) {
+        lote.forEach(function(x){ if (x.prev === undefined) snap.delete(x.id); else snap.set(x.id, x.prev); });
+        errores.push(tabla + ": " + ru.error.message);
+      } else cambios += lote.length;
+    }
+  }
+  if (cambios) console.log("💾 Supabase: " + cambios + " cambio(s) guardado(s)");
+  return errores.length ? {ok:false, error:errores[0]} : {ok:true, cambios:cambios};
+}
+
+// ─── TIEMPO REAL: aplica cambios de otros equipos, ignora mis propios ecos ───
+function suscribirCambios(cb) {
+  var canal = SB.channel("lm-cambios");
+  TABLAS.forEach(function(t){
+    canal.on("postgres_changes", {event:"*", schema:"public", table:t}, function(p){
+      try {
+        var snap = SNAP[t] || (SNAP[t] = new Map());
+        if (p.eventType === "DELETE") {
+          var idD = String((p.old || {}).id);
+          if (!snap.has(idD)) return;          // ya lo había borrado yo
+          snap.delete(idD);
+          cb(t, "DELETE", null, idD, true);
+          return;
+        }
+        var obj = deDb(t, p.new || {});
+        var id = String(obj.id), s = firma(t, obj);
+        if (snap.get(id) === s) return;        // eco de mi propio guardado
+        var existia = snap.has(id);
+        snap.set(id, s);
+        cb(t, p.eventType, obj, id, existia);
+      } catch (e) { console.warn("Realtime:", e); }
+    });
+  });
+  canal.subscribe(function(status){ console.log("📡 Tiempo real:", status); });
+  return canal;
+}
+
+// ─── IMÁGENES: Supabase Storage (las viejas de Drive siguen funcionando) ───
+function urlImagen(fileId) {
+  if (!fileId) return null;
+  if (String(fileId).indexOf("sb:") === 0) return SB.storage.from(BUCKET_IMG).getPublicUrl(String(fileId).slice(3)).data.publicUrl;
+  return "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w1000";
+}
+function urlDescarga(fileId) {
+  if (!fileId) return "#";
+  if (String(fileId).indexOf("sb:") === 0) return SB.storage.from(BUCKET_IMG).getPublicUrl(String(fileId).slice(3), {download:true}).data.publicUrl;
+  return "https://drive.google.com/uc?export=download&id=" + fileId;
+}
+async function subirImagenStorage(dataUrl, nombre) {
+  try {
+    var m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl || "");
+    if (!m) return {ok:false, error:"imagen inválida"};
+    var bin = atob(m[2]), arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    var ext = (m[1].split("/")[1] || "jpg").replace("jpeg","jpg").replace(/[^a-z0-9]/gi,"");
+    var limpio = String(nombre || "img").replace(/[^a-z0-9]/gi, "_").slice(0, 40);
+    var ruta = "pedidos/" + Date.now() + "_" + Math.random().toString(36).slice(2,7) + "_" + limpio + "." + ext;
+    var r = await SB.storage.from(BUCKET_IMG).upload(ruta, new Blob([arr], {type:m[1]}), {contentType:m[1], upsert:false});
+    if (r.error) return {ok:false, error:r.error.message};
+    return {ok:true, fileId:"sb:" + ruta, url:urlImagen("sb:" + ruta)};
+  } catch (e) { return {ok:false, error:e.message}; }
+}
+function eliminarImagenStorage(fileId) {
+  if (!fileId || String(fileId).indexOf("sb:") !== 0) return Promise.resolve();  // las de Drive se quedan en Drive
+  return SB.storage.from(BUCKET_IMG).remove([String(fileId).slice(3)]);
+}
+</script>
+
 <script type="text/babel">
 const { useState, useMemo } = React;
 
@@ -151,7 +390,7 @@ function normalizarPedido(p) {
   // (no se guarda en Sheets para no inflar/truncar la celda). Con el fileId basta.
   const prodsConImg = Array.isArray(prods) ? prods.map(function(pr){
     if (pr && !pr.imagen && pr.fileId) {
-      return Object.assign({}, pr, {imagen: "https://drive.google.com/thumbnail?id=" + pr.fileId + "&sz=w1000"});
+      return Object.assign({}, pr, {imagen: urlImagen(pr.fileId)});
     }
     return pr;
   }) : prods;
@@ -1654,12 +1893,9 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
     // Sube SIEMPRE el original a Drive y captura el fileId, se pueda o no generar
     // la miniatura local. Formatos como HEIC (iPhone) no se decodifican en canvas,
     // pero Drive sí genera su propia miniatura, así que la usamos de respaldo.
-    fetch(API_URL, {
-      method:'POST', headers:{"Content-Type":"text/plain"},
-      body: JSON.stringify({accion:'subir_imagen', imagen:base64Original, nombre:'cotizacion_producto'})
-    }).then(function(r){ return r.json(); }).then(function(data){
+    subirImagenStorage(base64Original, 'cotizacion_producto').then(function(data){
       if (data && data.ok && data.fileId) {
-        const driveThumb = "https://drive.google.com/thumbnail?id=" + data.fileId + "&sz=w1000";
+        const driveThumb = data.url;
         setProductos(function(prev){ return prev.map(function(p){
           if (p.id !== pid) return p;
           return Object.assign({}, p, {
@@ -1673,7 +1909,7 @@ function TabCotizador({insumos, molduras, nextFolio, setNextFolio, nextFolioQ, s
         actualizarProductoCot(pid, "subiendo", false);
       }
     }).catch(function(err){
-      console.warn("Drive falló: " + err.message);
+      console.warn("Subida de imagen falló: " + err.message);
       actualizarProductoCot(pid, "subiendo", false);
     });
   }
@@ -2867,12 +3103,9 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
         const prod = (form.productos||[]).find(function(p){return p.id===pid;});
         return prod ? prod.titulo : "imagen";
       })() || "imagen";
-      fetch(API_URL, {
-        method: 'POST', headers: {"Content-Type": "text/plain"},
-        body: JSON.stringify({accion:'subir_imagen', imagen:base64Original, nombre:tituloProd})
-      }).then(function(resp){ return resp.json(); }).then(function(data){
+      subirImagenStorage(base64Original, tituloProd).then(function(data){
         if (data && data.ok && data.fileId) {
-          const driveThumb = "https://drive.google.com/thumbnail?id=" + data.fileId + "&sz=w1000";
+          const driveThumb = data.url;
           setForm(function(prev) {
             const productos = (prev.productos||[]).map(function(p){
               return p.id===pid ? Object.assign({},p,{fileId:data.fileId, imagenDrive:driveThumb, imagen:(p.imagen||driveThumb), subiendo:false}) : p;
@@ -2883,7 +3116,7 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
           setForm(function(prev){ const productos=(prev.productos||[]).map(function(p){return p.id===pid?Object.assign({},p,{subiendo:false}):p;}); return Object.assign({},prev,{productos:productos}); });
         }
       }).catch(function(err){
-        console.warn("Drive upload failed: " + err.message);
+        console.warn("Subida de imagen falló: " + err.message);
         setForm(function(prev){ const productos=(prev.productos||[]).map(function(p){return p.id===pid?Object.assign({},p,{subiendo:false}):p;}); return Object.assign({},prev,{productos:productos}); });
       });
     }
@@ -2936,16 +3169,9 @@ function TabPedidos({pedidos, setPedidos, nextFolio, setNextFolio, stock, onNuev
     
     if (!confirmar("¿Eliminar la imagen de este producto?")) return;
     
-    // Si existe fileId, eliminar de Drive
+    // Si existe fileId, eliminar del almacenamiento (las viejas de Drive se conservan)
     if (prod.fileId) {
-      fetch(API_URL, {
-        method: 'POST',
-        headers: {"Content-Type": "text/plain"},
-        body: JSON.stringify({
-          accion: 'eliminar_imagen',
-          fileId: prod.fileId
-        })
-      }).catch(err => console.error("Error eliminando de Drive:", err));
+      eliminarImagenStorage(prod.fileId).catch(function(err){ console.error("Error eliminando imagen:", err); });
     }
     
     actualizarProducto(pid, "imagen", null);
@@ -5778,7 +6004,7 @@ function VistaPorMaterial({resumenPedidos, molduras, toggleTarea}) {
                         {sid === "impresion" && p.imagen && (
                           p.fileId ? (
                             <a
-                              href={"https://drive.google.com/uc?export=download&id="+p.fileId}
+                              href={urlDescarga(p.fileId)}
                               download={"pedido_"+p.folio+"_"+(String(p.tituloProd||"img").replace(/[^a-z0-9]/gi,"_"))+".jpg"}
                               target="_blank"
                               rel="noreferrer"
@@ -6042,7 +6268,7 @@ function TabFlujo({pedidos, setPedidos, molduras, insumos, stock}) {
                         <div key={String(pedido.id)+"-"+String(meta.id)+"-"+ii} style={{background:doneImg?"#F5F5F5":T.bgCard,border:"1px solid "+(doneImg?T.green+"60":T.border),borderRadius:8,padding:"8px 9px",marginBottom:8,opacity:doneImg?0.65:1,transition:"opacity 0.2s"}}>
                           <div style={{position:"relative"}}>
                             {meta.fileId ? (
-                              <a href={'https://drive.google.com/uc?export=download&id='+meta.fileId} download={"pedido_"+pedido.folio+"_"+((meta.titulo||"img").replace(/[^a-z0-9]/gi,"_"))+".jpg"} target="_blank" rel="noreferrer" style={{display:"block"}}>
+                              <a href={urlDescarga(meta.fileId)} download={"pedido_"+pedido.folio+"_"+((meta.titulo||"img").replace(/[^a-z0-9]/gi,"_"))+".jpg"} target="_blank" rel="noreferrer" style={{display:"block"}}>
                                 <img src={meta.imagen} alt="ref" style={{width:"100%",maxHeight:150,objectFit:"contain",background:"#fff",borderRadius:5,border:"1px solid #F0B060",cursor:"pointer",filter:doneImg?"grayscale(70%)":"none"}}/>
                               </a>
                             ) : (
@@ -6281,34 +6507,9 @@ const TABS = [
 ];
 
 // ══════════════════════════════════════════════════════
-//  BACKEND: 'postgres' | 'sheets'
-//  Para volver a Sheets: cambia a 'sheets' y sube a GitHub
+//  BACKEND: Supabase (ver capa de datos arriba del script)
 // ══════════════════════════════════════════════════════
-const BACKEND = 'sheets';
-
-const SHEETS_URL  = "https://script.google.com/macros/s/AKfycbx1El9o7YZNvZn1QhPXwCsjPo2LvWdSjJyh9bm6ET9Xt9vGdh7Fl14KKMkaf9YpaWjG/exec";
-const POSTGRES_URL = "https://lamarqueria.taileb249f.ts.net"; // ← poner URL de Tailscale Funnel
-
-const API_URL = BACKEND === 'postgres' ? POSTGRES_URL + '/api' : SHEETS_URL;
-
-// ID único de esta sesión/navegador (para no recargar por mis propios cambios)
-const CLIENTE_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
-
-// URL del WebSocket (wss para HTTPS de Tailscale)
-const WS_URL = BACKEND === 'postgres' ? POSTGRES_URL.replace('https://','wss://').replace('http://','ws://') : null;
-
-// Sincronizar fecha con el servidor (evita fechas incorrectas en otras PCs)
-if (BACKEND === 'postgres') {
-  fetch(POSTGRES_URL + '/api/fecha')
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if (d && d.ok && d.fecha) {
-        FECHA_OVERRIDE = d.fecha;
-        console.log('Fecha del servidor:', FECHA_OVERRIDE);
-      }
-    })
-    .catch(function(){ console.warn('No se pudo obtener fecha del servidor'); });
-}
+const BACKEND = 'supabase';
 
 const ErrorBoundary = (function(){
   function EB(props) {
@@ -6470,6 +6671,7 @@ function App() {
   // Notificacion de pedidos nuevos creados desde otra PC (polling cada 60s)
   const foliosConocidos = React.useRef(null); // Set de folios que ya conocemos; null hasta la 1a carga
   const [avisoPedidos, setAvisoPedidos] = useState(null); // {cantidad, folios:[...]} o null
+  const [errorCarga, setErrorCarga] = useState(null);
   const notifPreguntada = React.useRef(false);
 
   // Asigna IDs únicos a registros que no lo tengan (NO elimina duplicados:
@@ -6501,9 +6703,9 @@ function App() {
   }
 
   function cargarDatos(esRemoto) {
-    return fetch(API_URL + "?accion=leer_todo")
-      .then(function(r) { return r.json(); })
+    return leerTodo()
       .then(function(resp) {
+        if (!resp.ok) { setErrorCarga(resp.error || "Error de conexión"); setCargando(false); return; }
         // El nuevo script devuelve {ok:true, data:{...}}
         const data = resp && resp.ok && resp.data ? resp.data : {};
         if (esRemoto) recargandoRemoto.current = true;
@@ -6558,8 +6760,7 @@ function App() {
         if (data.proveedores_registro && data.proveedores_registro.length > 0) setProveedoresReg(asegurarIds(data.proveedores_registro, 'pv'));
         if (data.stock && data.stock.length > 0) setStock(data.stock);
         if (data.insumos && data.insumos.length > 0) setInsumos(data.insumos);
-        // Solo sobreescribir molduras si Sheets tiene MAS o IGUAL que las locales (preserva carga inicial del HTML)
-        if (data.molduras && data.molduras.length >= MOLDURAS0.length && data.molduras.length > 0) {
+        if (data.molduras && data.molduras.length > 0) {
           setMolduras(data.molduras);
         }
         if (data.temas && data.temas.length > 0) setTemas(data.temas);
@@ -6572,89 +6773,47 @@ function App() {
     cargarDatos(false);
   }, []);
 
-  // ─── Notificación de pedidos nuevos (polling cada 60s) ───
-  // Consulta el Sheet solo para comparar folios de pedidos. Si aparecen folios
-  // que no conocíamos (creados desde otra PC/celular), avisa — sin tocar los
-  // datos locales ni recargar nada. El usuario decide cuándo actualizar.
+  // ─── TIEMPO REAL (Supabase): cambios de otros equipos entran solos ───
   React.useEffect(function() {
-    // Pedir permiso de notificaciones del navegador una sola vez
     if (typeof Notification !== "undefined" && Notification.permission === "default" && !notifPreguntada.current) {
       notifPreguntada.current = true;
       try { Notification.requestPermission(); } catch(e) {}
     }
-
-    const intervalo = setInterval(function() {
-      // No revisar hasta que la 1a carga haya establecido los folios base
-      if (!foliosConocidos.current) return;
-      fetch(API_URL + "?accion=leer_todo")
-        .then(function(r){ return r.json(); })
-        .then(function(resp){
-          const data = resp && resp.ok && resp.data ? resp.data : {};
-          if (!data.pedidos || !data.pedidos.length) return;
-          const foliosRemotos = data.pedidos.map(function(p){ return String(p.folio); });
-          const nuevos = foliosRemotos.filter(function(f){ return !foliosConocidos.current.has(f); });
-          if (nuevos.length > 0) {
-            // Marcar como conocidos para no volver a avisar de los mismos
-            nuevos.forEach(function(f){ foliosConocidos.current.add(f); });
-            setAvisoPedidos({ cantidad: nuevos.length, folios: nuevos });
-            // Notificación del navegador (aunque esté en otra pestaña)
-            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-              try {
-                const titulo = nuevos.length === 1 ? "Nuevo pedido" : nuevos.length + " pedidos nuevos";
-                const cuerpo = nuevos.length === 1
-                  ? "Se registró el pedido #" + nuevos[0] + " desde otro equipo."
-                  : "Se registraron los pedidos #" + nuevos.slice(0,5).join(", #") + (nuevos.length>5?"…":"") + " desde otro equipo.";
-                new Notification(titulo, { body: cuerpo, tag: "pedidos-nuevos", requireInteraction: false });
-              } catch(e) {}
-            }
-          }
-        })
-        .catch(function(){ /* silencioso: si falla el poll, no molestar */ });
-    }, 60000);
-
-    return function(){ clearInterval(intervalo); };
-  }, []);
-
-  // ─── WebSocket: recarga automática cuando otra PC guarda cambios ───
-  React.useEffect(function() {
-    if (BACKEND !== 'postgres' || !WS_URL) return;
-    let reconectarTimer = null;
-
-    function conectar() {
-      try {
-        const ws = new WebSocket(WS_URL);
-        wsRef.current = ws;
-
-        ws.onopen = function() { console.log('🔌 WebSocket conectado'); };
-
-        ws.onmessage = function(ev) {
-          try {
-            const msg = JSON.parse(ev.data);
-            // Si el cambio lo hice YO mismo, ignorar
-            if (msg.tipo === 'cambios' && msg.origen !== CLIENTE_ID) {
-              console.log('📡 Cambios detectados en otra PC, recargando...');
-              cargarDatos(true);
-            }
-          } catch(_){}
-        };
-
-        ws.onclose = function() {
-          console.warn('🔌 WebSocket desconectado, reintentando en 5s...');
-          reconectarTimer = setTimeout(conectar, 5000);
-        };
-
-        ws.onerror = function() { ws.close(); };
-      } catch(e) {
-        reconectarTimer = setTimeout(conectar, 5000);
-      }
-    }
-
-    conectar();
-
-    return function() {
-      if (reconectarTimer) clearTimeout(reconectarTimer);
-      if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); }
+    const setters = {
+      pedidos: setPedidos, cotizaciones: setCotizaciones, ventas_pos: setVentasPOS,
+      costos: setCostos, gastos: setGastos, clientes: setClientes,
+      proveedores_registro: setProveedoresReg, stock: setStock, insumos: setInsumos,
+      molduras: setMolduras, temas: setTemas
     };
+    function aplicar(setter, tipo, obj, id) {
+      setter(function(prev) {
+        const lista = prev || [];
+        if (tipo === "DELETE") return lista.filter(function(x){ return String(x.id) !== id; });
+        const ya = lista.some(function(x){ return String(x.id) === id; });
+        return ya ? lista.map(function(x){ return String(x.id) === id ? obj : x; }) : lista.concat([obj]);
+      });
+    }
+    const canal = suscribirCambios(function(tabla, tipo, obj, id, existia) {
+      if (tabla === "categorias_registro") {
+        if (tipo === "DELETE") { aplicar(setCatCostos, tipo, null, id); aplicar(setCatGastos, tipo, null, id); return; }
+        aplicar(obj.tipo === "gasto" ? setCatGastos : setCatCostos, tipo, obj, id);
+        return;
+      }
+      const setter = setters[tabla];
+      if (!setter) return;
+      if (tabla === "pedidos" && obj) obj = normalizarPedido(obj);
+      aplicar(setter, tipo, obj, id);
+      if (tabla === "pedidos" && tipo === "INSERT" && !existia) {
+        setAvisoPedidos(function(prev) {
+          const folios = (prev ? prev.folios : []).concat([String(obj.folio)]);
+          return { cantidad: folios.length, folios: folios };
+        });
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          try { new Notification("Nuevo pedido", { body: "Se registró el pedido #" + obj.folio + " (" + (obj.cliente||"") + ") desde otro equipo.", tag: "pedidos-nuevos" }); } catch(e) {}
+        }
+      }
+    });
+    return function() { SB.removeChannel(canal); };
   }, []);
 
   React.useEffect(function() {
@@ -6678,27 +6837,8 @@ function App() {
         return;
       }
       setGuardando(true);
-      const pedidosLimpios = pedidos.map(function(p) {
-        const tot = calcularTotal(p);
-        const saldo = calcularSaldo(p);
-        // No guardar miniaturas base64 dentro de productos: inflan la celda JSON
-        // y el backend la trunca (>49k) corrompiendo TODO el pedido. Guardamos solo
-        // el fileId; la imagen se reconstruye desde Drive al recargar (normalizarPedido).
-        const prods = parsearJSON(p.productos);
-        const productosLimpios = Array.isArray(prods) ? prods.map(function(pr){
-          if (!pr || typeof pr !== "object") return pr;
-          const out = Object.assign({}, pr);
-          if (typeof out.imagen === "string" && out.imagen.indexOf("data:") === 0) out.imagen = null;
-          if (typeof out.imagenDrive === "string" && out.imagenDrive.indexOf("data:") === 0) out.imagenDrive = null;
-          delete out.subiendo;
-          return out;
-        }) : prods;
-        return Object.assign({}, p, {imagen: null, productos: productosLimpios, total: tot, saldo: saldo});
-      });
-      const payload = JSON.stringify({
-        accion: "guardar_todo",
-        clienteId: CLIENTE_ID,
-        pedidos: pedidosLimpios,
+      sincronizarTodo({
+        pedidos: pedidos,
         cotizaciones: cotizaciones,
         ventas_pos: ventasPOS,
         costos: costos,
@@ -6710,19 +6850,12 @@ function App() {
         insumos: insumos,
         molduras: molduras,
         temas: temas
-      });
-      console.log('💾 GUARDANDO:', 'pedidos:', pedidosLimpios.length, '| ventas_pos:', ventasPOS.length, '| costos:', costos.length, '| gastos:', gastos.length, '| stock:', stock.length);
-      fetch(API_URL, {
-        method: "POST",
-        headers: {"Content-Type": "text/plain"},
-        body: payload
-      }).then(function(r) { return r.json(); })
-      .then(function(data) {
+      }).then(function(data) {
         setGuardando(false);
         if (data && data.ok) {
           setGuardadoAt(new Date().toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"}));
         } else {
-          setGuardadoAt("\u26a0\ufe0f " + (data && data.error ? data.error.substring(0,40) : "Error al guardar"));
+          setGuardadoAt("\u26a0\ufe0f " + (data && data.error ? data.error.substring(0,60) : "Error al guardar"));
         }
       }).catch(function(err) {
         setGuardando(false);
@@ -6760,12 +6893,25 @@ function App() {
   const flujoCount = pedidos.filter(function(p) { return p.estado==="Produccion"; }).length;
   const cxcCount = pedidos.filter(function(p) { return p.estado!=="Bodega" && Math.round(saldoPedido(p)) > 0; }).length;
 
+  if (errorCarga) return (
+    <div style={{minHeight:"100vh",background:T.bg,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,padding:20,textAlign:"center"}}>
+      <div style={{fontFamily:SERIF,fontSize:22,letterSpacing:5,fontWeight:700}}>LA MARQUERIA</div>
+      <div style={{fontFamily:FS,color:T.red,fontSize:14,fontWeight:600}}>⚠️ No se pudieron cargar los datos</div>
+      <div style={{fontFamily:FS,color:T.textSub,fontSize:12,maxWidth:420}}>{errorCarga}</div>
+      <div style={{fontFamily:FS,color:T.textFade,fontSize:11}}>Por seguridad no se guardará nada hasta que la carga sea correcta.</div>
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={() => window.location.reload()} style={{background:T.header,color:"#fff",border:"none",borderRadius:6,padding:"8px 18px",fontWeight:700,cursor:"pointer",fontFamily:FS}}>Reintentar</button>
+        <button onClick={() => SB.auth.signOut().then(function(){ window.location.reload(); })} style={{background:"none",border:"1px solid "+T.border,borderRadius:6,padding:"8px 18px",cursor:"pointer",fontFamily:FS}}>Cerrar sesión</button>
+      </div>
+    </div>
+  );
+
   if (cargando) return (
     <div style={{minHeight:"100vh",background:T.bg,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:20}}>
       <div style={{border:"2px solid #1A1A1A",padding:"8px 28px"}}>
         <div style={{fontFamily:SERIF,fontSize:22,letterSpacing:5,fontWeight:700}}>LA MARQUERIA</div>
       </div>
-      <div style={{fontFamily:FS,color:T.textSub,fontSize:14}}>⏳ Cargando datos desde Google Sheets...</div>
+      <div style={{fontFamily:FS,color:T.textSub,fontSize:14}}>⏳ Cargando datos...</div>
     </div>
   );
 
@@ -6779,7 +6925,7 @@ function App() {
           <div style={{color:"rgba(255,255,255,0.7)",fontSize:11,fontFamily:FS,marginBottom:6}}>
             <span style={{fontWeight:700,fontSize:13,color:"#fff"}}>📅 {fmtD(fechaAjuste || HOY_ACTUAL())} · 🕐 {horaAjuste || HORA_ACTUAL()}</span>
             {guardando && <span style={{marginLeft:8,color:"#FFF8E0",animation:"blink 1s infinite"}}> ⏳ Guardando costos/gastos/pedidos...</span>}
-            {!guardando && guardadoAt === "⚠️ Sin respuesta" && <span style={{marginLeft:8,color:"#FF9999"}}> ⚠️ No hay respuesta de Sheets</span>}
+            {!guardando && guardadoAt === "⚠️ Sin respuesta" && <span style={{marginLeft:8,color:"#FF9999"}}> ⚠️ Sin respuesta del servidor</span>}
             {!guardando && guardadoAt === "⚠️ Error de red" && <span style={{marginLeft:8,color:"#FF6666"}}> ⚠️ Error de conexión</span>}
             {!guardando && guardadoAt && guardadoAt !== "⚠️ Sin respuesta" && guardadoAt !== "⚠️ Error de red" && <span style={{marginLeft:8,color:"#A8E6A3"}}> ✓ Guardado {guardadoAt}</span>}
             {!guardando && !guardadoAt && <span style={{marginLeft:8,color:"rgba(255,255,255,0.4)"}}> · Listo</span>}
@@ -6790,7 +6936,7 @@ function App() {
           }}>
             Próx. Nota: {nextFolioS} · Próx. POS: {nextFolioP} · <u>Ajustar fecha si es necesario</u>
           </div>
-          <div style={{color:"rgba(255,255,255,0.45)",fontSize:10,fontFamily:FS,marginTop:4}}>Jose Ma. Morelos 745 Nte. · Culiacan · <u title="Requiere estar en la cuenta de Google que controla la base de datos">Acct: Google conectada</u></div>
+          <div style={{color:"rgba(255,255,255,0.45)",fontSize:10,fontFamily:FS,marginTop:4}}>Jose Ma. Morelos 745 Nte. · Culiacan · 👤 {(USUARIO_ACTUAL && (USUARIO_ACTUAL.nombre || USUARIO_ACTUAL.email)) || ""} · <u style={{cursor:"pointer"}} onClick={() => { if (confirmar("¿Cerrar sesión?")) SB.auth.signOut().then(function(){ window.location.reload(); }); }}>Salir</u></div>
         </div>
       </div>
       {avisoPedidos && (
@@ -6801,11 +6947,11 @@ function App() {
               {avisoPedidos.cantidad === 1
                 ? "Hay 1 pedido nuevo (#"+avisoPedidos.folios[0]+") registrado desde otro equipo."
                 : "Hay "+avisoPedidos.cantidad+" pedidos nuevos registrados desde otro equipo."}
-              <span style={{fontWeight:400,color:T.textSub}}> Recarga la página para verlos.</span>
+              <span style={{fontWeight:400,color:T.textSub}}> Ya aparece en la lista.</span>
             </span>
           </div>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <button onClick={() => window.location.reload()} style={{background:T.header,color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:FS}}>Actualizar</button>
+            <button onClick={() => { setTab("pedidos"); setAvisoPedidos(null); }} style={{background:T.header,color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:FS}}>Ver pedidos</button>
             <button onClick={() => setAvisoPedidos(null)} style={{background:"none",border:"none",color:T.textFade,fontSize:18,cursor:"pointer",lineHeight:1,padding:"0 4px"}} title="Descartar">×</button>
           </div>
         </div>
@@ -6880,36 +7026,71 @@ function App() {
 }
 
 function LoginScreen({onLogin}) {
+  const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
-  const PASS = "marqueria2024";
+  const [error, setError] = useState("");
+  const [entrando, setEntrando] = useState(false);
   function intentar() {
-    if (pw === PASS) { onLogin(); }
-    else { alert("Contraseña incorrecta"); setPw(""); }
+    if (!email || !pw) { setError("Escribe correo y contraseña"); return; }
+    setEntrando(true); setError("");
+    SB.auth.signInWithPassword({ email: email.trim(), password: pw }).then(function(res) {
+      setEntrando(false);
+      if (res.error) { setError(res.error.message === "Invalid login credentials" ? "Correo o contraseña incorrectos" : res.error.message); setPw(""); return; }
+      onLogin(res.data.session);
+    });
   }
+  const inp = {width:"100%",padding:"10px 12px",borderRadius:6,border:"1px solid #ddd",fontFamily:FS,fontSize:13,boxSizing:"border-box",outline:"none",marginBottom:14};
   return (
-    <div style={{minHeight:"100vh",background:"#1a1a1a",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FS}}>
+    <div style={{minHeight:"100vh",background:"#1a1a1a",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FS,padding:16}}>
       <div style={{background:"#fff",borderRadius:12,padding:"40px 35px",maxWidth:340,width:"100%",boxShadow:"0 10px 40px rgba(0,0,0,0.3)"}}>
         <div style={{fontFamily:SERIF,fontSize:24,fontWeight:700,textAlign:"center",marginBottom:4,letterSpacing:3}}>LA MARQUERIA</div>
         <div style={{fontSize:11,color:"#888",textAlign:"center",marginBottom:28}}>Sistema de Gestión</div>
+        <label style={{display:"block",fontSize:11,fontWeight:600,color:"#333",marginBottom:6}}>Correo</label>
+        <input type="email" value={email} autoFocus autoComplete="username" onChange={function(e){setEmail(e.target.value);}} onKeyPress={function(e){if(e.key==="Enter") intentar();}} placeholder="correo@ejemplo.com" style={inp}/>
         <label style={{display:"block",fontSize:11,fontWeight:600,color:"#333",marginBottom:6}}>Contraseña</label>
-        <input
-          type="password"
-          value={pw}
-          onChange={function(e){setPw(e.target.value);}}
-          onKeyPress={function(e){if(e.key==="Enter") intentar();}}
-          placeholder="••••••••••••"
-          autoFocus
-          style={{width:"100%",padding:"10px 12px",borderRadius:6,border:"1px solid #ddd",fontFamily:FS,fontSize:13,boxSizing:"border-box",outline:"none",marginBottom:14}}
-        />
-        <button onClick={intentar} style={{width:"100%",background:"#1a1a1a",color:"#fff",border:"none",borderRadius:6,padding:"11px 0",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:FS}}>Ingresar →</button>
+        <input type="password" value={pw} autoComplete="current-password" onChange={function(e){setPw(e.target.value);}} onKeyPress={function(e){if(e.key==="Enter") intentar();}} placeholder="••••••••••••" style={inp}/>
+        {error && <div style={{color:"#C62828",fontSize:12,marginBottom:12,textAlign:"center"}}>{error}</div>}
+        <button onClick={intentar} disabled={entrando} style={{width:"100%",background:"#1a1a1a",color:"#fff",border:"none",borderRadius:6,padding:"11px 0",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:FS,opacity:entrando?0.6:1}}>{entrando ? "Entrando..." : "Ingresar →"}</button>
       </div>
     </div>
   );
 }
 
+function cargarPerfil(session) {
+  if (!session || !session.user) { USUARIO_ACTUAL = null; return Promise.resolve(null); }
+  return SB.from("perfiles").select("nombre, rol, activo").eq("id", session.user.id).maybeSingle().then(function(r) {
+    const p = r.data || {};
+    USUARIO_ACTUAL = { id: session.user.id, email: session.user.email, nombre: p.nombre || "", rol: p.rol || "staff", activo: p.activo !== false };
+    return USUARIO_ACTUAL;
+  });
+}
+
 function AppWrapper() {
-  const [logged, setLogged] = useState(false);
-  if (!logged) return <LoginScreen onLogin={function(){setLogged(true);}}/>;
+  const [estado, setEstado] = useState("revisando"); // revisando | fuera | dentro | inactivo
+  function entrar(session) {
+    cargarPerfil(session).then(function(u) {
+      if (!u) { setEstado("fuera"); return; }
+      setEstado(u.activo ? "dentro" : "inactivo");
+    });
+  }
+  React.useEffect(function() {
+    SB.auth.getSession().then(function(r) {
+      const s = r.data && r.data.session;
+      if (s) entrar(s); else setEstado("fuera");
+    });
+    const sub = SB.auth.onAuthStateChange(function(evento) {
+      if (evento === "SIGNED_OUT") { USUARIO_ACTUAL = null; setEstado("fuera"); }
+    });
+    return function() { sub.data.subscription.unsubscribe(); };
+  }, []);
+  if (estado === "revisando") return <div style={{minHeight:"100vh",background:"#1a1a1a"}}/>;
+  if (estado === "fuera") return <LoginScreen onLogin={entrar}/>;
+  if (estado === "inactivo") return (
+    <div style={{minHeight:"100vh",background:"#1a1a1a",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontFamily:FS,flexDirection:"column",gap:12}}>
+      <div>Tu usuario está desactivado. Pide acceso al administrador.</div>
+      <button onClick={() => SB.auth.signOut()} style={{background:"#fff",border:"none",borderRadius:6,padding:"8px 16px",cursor:"pointer"}}>Salir</button>
+    </div>
+  );
   return <App/>;
 }
 
