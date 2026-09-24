@@ -57,9 +57,9 @@ var MAPA = {
   temas: [["id","id","t"],["nombre","nombre","t"]],
   stock: [["id","id","t"],["nombre","nombre","t"],["categoria","categoria","t"],["alto","alto","n"],["ancho","ancho","n"],["medidas","medidas","t"],
     ["precio","precio","n0"],["costo","costo","n0"],["stockMin","stock_min","n0"],["composicion","composicion","j"],["temas","temas","j"],
-    ["tema","tema","t"],["stock","stock","n"]],
-  insumos: [["id","id","t"],["nombre","nombre","t"],["cat","cat","t"],["costo","costo","n0"],["margen","margen","n0"],["precio","precio","n0"]],
-  molduras: [["id","id","t"],["nombre","nombre","t"],["costo_ml","costo_ml","n0"],["margen","margen","n0"],["precio_ml","precio_ml","n0"],["desperdicio","desperdicio","n0"]]
+    ["tema","tema","t"],["stock","stock","n"],["orden","orden","n"]],
+  insumos: [["id","id","t"],["nombre","nombre","t"],["cat","cat","t"],["costo","costo","n0"],["margen","margen","n0"],["precio","precio","n0"],["orden","orden","n"]],
+  molduras: [["id","id","t"],["nombre","nombre","t"],["costo_ml","costo_ml","n0"],["margen","margen","n0"],["precio_ml","precio_ml","n0"],["desperdicio","desperdicio","n0"],["orden","orden","n"]]
 };
 var TABLAS = Object.keys(MAPA);
 
@@ -762,6 +762,137 @@ const CATS_INS = [
 ];
 
 // ── PRIMITIVOS UI ─────────────────────────────────────────────
+// ── ORDEN PERSONALIZADO DE CATÁLOGOS (stock, molduras, insumos) ──
+// El campo "orden" (entero, pasos de 10) define cómo aparecen en POS y Pedido Nuevo.
+const CATALOGOS_ORDENABLES = ["stock","molduras","insumos"];
+function ordenNum(x) { const n = parseFloat(x && x.orden); return isNaN(n) ? 1e9 : n; }
+function ordenarCatalogo(arr) {
+  return (arr||[]).slice().sort(function(a,b){
+    const d = ordenNum(a) - ordenNum(b);
+    if (d) return d;
+    return String(a.nombre||"").localeCompare(String(b.nombre||""), "es", {numeric:true, sensitivity:"base"});
+  });
+}
+function renumerarCatalogo(arr) {
+  return arr.map(function(x,i){ const o = (i+1)*10; return ordenNum(x) === o ? x : Object.assign({}, x, {orden:o}); });
+}
+function siguienteOrden(arr) {
+  return (arr||[]).reduce(function(m,x){ const n = ordenNum(x); return (n < 1e9 && n > m) ? n : m; }, 0) + 10;
+}
+
+function OrdenadorCatalogo({titulo, items, setItems, grupoDe, gruposFijos, detalle, onCerrar}) {
+  const [busq, setBusq] = useState("");
+  const [arr, setArr] = useState(null);   // {gi, idx}
+  const [sobre, setSobre] = useState(null);
+  const [posEdit, setPosEdit] = useState({});
+  const lista = ordenarCatalogo(items);
+
+  // Armar grupos
+  let grupos;
+  if (!grupoDe) {
+    grupos = [{key:"_", label:null, items:lista}];
+  } else if (gruposFijos) {
+    const keys = gruposFijos.map(function(g){ return g.id; });
+    grupos = gruposFijos.map(function(g){ return {key:g.id, label:g.label, items:lista.filter(function(x){ return grupoDe(x) === g.id; })}; });
+    const otros = lista.filter(function(x){ return keys.indexOf(grupoDe(x)) < 0; });
+    if (otros.length) grupos.push({key:"_otros", label:"Otros", items:otros});
+  } else {
+    grupos = [];
+    lista.forEach(function(x){
+      const k = grupoDe(x);
+      let g = grupos.find(function(gg){ return gg.key === k; });
+      if (!g) { g = {key:k, label:k, items:[]}; grupos.push(g); }
+      g.items.push(x);
+    });
+  }
+  const gruposMovibles = !!grupoDe && !gruposFijos;
+
+  function aplicar(nuevos) {
+    const flat = [].concat.apply([], nuevos.map(function(g){ return g.items; }));
+    setItems(renumerarCatalogo(flat));
+  }
+  function clonar() { return grupos.map(function(g){ return Object.assign({}, g, {items:g.items.slice()}); }); }
+  function moverA(gi, desde, hasta) {
+    const gs = clonar(); const its = gs[gi].items;
+    hasta = Math.max(0, Math.min(its.length-1, hasta));
+    if (desde === hasta) return;
+    const x = its.splice(desde, 1)[0]; its.splice(hasta, 0, x);
+    aplicar(gs);
+  }
+  function moverGrupo(gi, delta) {
+    const to = gi + delta; if (to < 0 || to >= grupos.length) return;
+    const gs = clonar(); const g = gs.splice(gi,1)[0]; gs.splice(to,0,g); aplicar(gs);
+  }
+  function aZ(gi) {
+    if (!confirmar("¿Ordenar alfabéticamente " + (grupos[gi].label ? "\"" + grupos[gi].label + "\"" : "toda la lista") + "? Se pierde el orden actual de ese grupo.")) return;
+    const gs = clonar();
+    gs[gi].items.sort(function(a,b){ return String(a.nombre||"").localeCompare(String(b.nombre||""), "es", {numeric:true, sensitivity:"base"}); });
+    aplicar(gs);
+  }
+
+  const q = busq.trim().toLowerCase();
+  const bt = {background:T.bgCard,border:"1px solid "+T.border,borderRadius:5,padding:"3px 8px",cursor:"pointer",fontFamily:FS,fontSize:12,color:T.textSub,minWidth:30};
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:220,fontFamily:FS,fontSize:12,color:T.textSub}}>
+          <strong style={{color:T.text}}>↕ Ordenar {titulo}</strong> — este orden es el que verás en <strong>POS</strong> y <strong>Pedido Nuevo</strong>. Arrastra ⠿ o usa las flechas. Se guarda solo.
+        </div>
+        <input value={busq} onChange={function(e){ setBusq(e.target.value); }} placeholder="Buscar…" style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:7,padding:"7px 11px",fontFamily:FS,fontSize:12,outline:"none",width:200}}/>
+        <button onClick={onCerrar} style={{background:T.header,color:"#fff",border:"none",borderRadius:7,padding:"7px 16px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:600}}>✓ Listo</button>
+      </div>
+      {q && <div style={{fontFamily:FS,fontSize:11,color:T.orange,marginBottom:8}}>Con búsqueda activa se desactiva arrastrar; usa flechas o escribe la posición.</div>}
+      {grupos.map(function(g, gi) {
+        const visibles = g.items.map(function(x,i){ return {x:x, i:i}; }).filter(function(o){ return !q || String(o.x.nombre||"").toLowerCase().indexOf(q) >= 0; });
+        if (q && !visibles.length) return null;
+        return (
+          <div key={g.key} style={{marginBottom:14,border:"1px solid "+T.border,borderRadius:9,background:T.bgCard,overflow:"hidden"}}>
+            {(g.label || !grupoDe) && (
+              <div style={{display:"flex",alignItems:"center",gap:6,padding:"7px 10px",background:T.bgDark,borderBottom:"1px solid "+T.border}}>
+                <div style={{flex:1,fontFamily:FS,fontWeight:700,fontSize:11,letterSpacing:"0.08em",textTransform:"uppercase",color:T.textSub}}>{g.label || "Lista completa"} <span style={{fontWeight:400,color:T.textFade}}>({g.items.length})</span></div>
+                {gruposMovibles && <button title="Subir categoría" onClick={function(){ moverGrupo(gi,-1); }} disabled={gi===0} style={Object.assign({},bt,{opacity:gi===0?0.35:1})}>▲</button>}
+                {gruposMovibles && <button title="Bajar categoría" onClick={function(){ moverGrupo(gi,1); }} disabled={gi===grupos.length-1} style={Object.assign({},bt,{opacity:gi===grupos.length-1?0.35:1})}>▼</button>}
+                <button title="Ordenar A→Z" onClick={function(){ aZ(gi); }} style={bt}>A→Z</button>
+              </div>
+            )}
+            {visibles.map(function(o) {
+              const x = o.x, i = o.i, n = g.items.length;
+              const k = g.key + "|" + x.id;
+              const esSobre = sobre === k && arr && arr.gi === gi && arr.idx !== i;
+              return (
+                <div key={x.id}
+                  draggable={!q}
+                  onDragStart={function(e){ setArr({gi:gi, idx:i}); try { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(x.id)); } catch(er){} }}
+                  onDragOver={function(e){ if (arr && arr.gi === gi) { e.preventDefault(); if (sobre !== k) setSobre(k); } }}
+                  onDragLeave={function(){ if (sobre === k) setSobre(null); }}
+                  onDrop={function(e){ e.preventDefault(); if (arr && arr.gi === gi) moverA(gi, arr.idx, i); setArr(null); setSobre(null); }}
+                  onDragEnd={function(){ setArr(null); setSobre(null); }}
+                  style={{display:"flex",alignItems:"center",gap:8,padding:"5px 10px",borderBottom:"1px solid "+T.border+"80",borderTop:esSobre?"2px solid "+T.amber:"2px solid transparent",background:(arr && arr.gi===gi && arr.idx===i)?T.orangeBg:"transparent",fontFamily:FS,fontSize:12}}>
+                  <span style={{cursor:q?"default":"grab",color:T.textFade,fontSize:15,userSelect:"none",opacity:q?0.3:1}}>⠿</span>
+                  <input key={k+"-"+i} defaultValue={i+1} type="number" min={1} max={n}
+                    onKeyDown={function(e){ if (e.key === "Enter") e.target.blur(); }}
+                    onBlur={function(e){ const v = parseInt(e.target.value); if (!isNaN(v) && v-1 !== i) moverA(gi, i, v-1); else e.target.value = i+1; }}
+                    title="Escribe la posición y presiona Enter"
+                    style={{width:48,background:T.bgDark,border:"1px solid "+T.border,borderRadius:5,padding:"3px 5px",textAlign:"center",fontFamily:FS,fontSize:11,color:T.textSub,outline:"none"}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,color:T.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{x.nombre || "(sin nombre)"}</div>
+                    {detalle && <div style={{fontSize:10,color:T.textFade}}>{detalle(x)}</div>}
+                  </div>
+                  <button title="Al inicio" onClick={function(){ moverA(gi,i,0); }} disabled={i===0} style={Object.assign({},bt,{opacity:i===0?0.35:1})}>⤒</button>
+                  <button title="Subir" onClick={function(){ moverA(gi,i,i-1); }} disabled={i===0} style={Object.assign({},bt,{opacity:i===0?0.35:1})}>▲</button>
+                  <button title="Bajar" onClick={function(){ moverA(gi,i,i+1); }} disabled={i===n-1} style={Object.assign({},bt,{opacity:i===n-1?0.35:1})}>▼</button>
+                  <button title="Al final" onClick={function(){ moverA(gi,i,n-1); }} disabled={i===n-1} style={Object.assign({},bt,{opacity:i===n-1?0.35:1})}>⤓</button>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Card({children, style}) {
   return <div style={Object.assign({background:T.bgCard,border:"1px solid "+T.border,borderRadius:10,padding:"14px 16px",boxShadow:"0 1px 4px rgba(0,0,0,0.06)"},style||{})}>{children}</div>;
 }
@@ -4058,7 +4189,8 @@ function FormProductoStock({inicial, molduras, insumos, temas, onGuardar, onCanc
       costo: costo,
       stockMin: parseInt(form.stockMin) || 2,
       composicion: form.composicion || [],
-      temas: temasLimpios
+      temas: temasLimpios,
+      orden: form.orden
     });
   }
 
@@ -4197,7 +4329,7 @@ function StockAgrupado({stock, setStock, IS, updSt, molduras, insumos, temas}) {
   const [modalNuevo, setModalNuevo] = useState(false);
 
   function guardarNuevo(p) {
-    setStock(stock.concat([p]));
+    setStock(stock.concat([Object.assign({}, p, {orden: siguienteOrden(stock)})]));
     setModalNuevo(false);
   }
   function guardarEditado(p) {
@@ -4565,6 +4697,7 @@ function ModalDetalleVentaPOS({venta, onClose, categoriaItem}) {
 // ── BASES DE DATOS ────────────────────────────────────────────
 function TabBases({insumos, setInsumos, molduras, setMolduras, stock, setStock, temas, setTemas, catCostos, setCatCostos, catGastos, setCatGastos, proveedoresReg, setProveedoresReg}) {
   const [sub, setSub] = useState("stock");
+  const [ordenando, setOrdenando] = useState(false);
   const IS = {background:T.bgCard,border:"1px solid "+T.border,borderRadius:5,padding:"4px 7px",color:T.text,fontFamily:FS,fontSize:12,outline:"none",width:"100%"};
 
   function updMol(id,f,v) {
@@ -4623,16 +4756,24 @@ function TabBases({insumos, setInsumos, molduras, setMolduras, stock, setStock, 
         <div style={{fontFamily:FONT,fontSize:19,fontWeight:700}}>Bases de Datos</div>
         <div style={{display:"flex",border:"1px solid "+T.border,borderRadius:7,overflow:"hidden"}}>
           {[["stock","Stock"],["molduras","Molduras"],["insumos","Insumos"],["temas","Temas"],["categorias","Categorías"]].map(function(item) {
-            return <button key={item[0]} onClick={() => setSub(item[0])} style={{background:sub===item[0]?T.bgDark:"transparent",color:sub===item[0]?T.text:T.textFade,border:"none",padding:"7px 14px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:sub===item[0]?700:400}}>{item[1]}</button>;
+            return <button key={item[0]} onClick={() => { setSub(item[0]); setOrdenando(false); }} style={{background:sub===item[0]?T.bgDark:"transparent",color:sub===item[0]?T.text:T.textFade,border:"none",padding:"7px 14px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:sub===item[0]?700:400}}>{item[1]}</button>;
           })}
         </div>
       </div>
-      {sub==="stock" && <StockAgrupado stock={stock} setStock={setStock} IS={IS} updSt={updSt} molduras={molduras} insumos={insumos} temas={temas}/>}
-      {sub==="molduras" && (
+      {CATALOGOS_ORDENABLES.indexOf(sub) >= 0 && !ordenando && (
+        <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}>
+          <button onClick={() => setOrdenando(true)} style={{background:T.amber,color:"#fff",border:"none",borderRadius:7,padding:"7px 16px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:600}}>↕ Ordenar para POS / Pedido Nuevo</button>
+        </div>
+      )}
+      {ordenando && sub==="stock" && <OrdenadorCatalogo titulo="productos de stock" items={stock} setItems={setStock} grupoDe={function(p){ return p.categoria || "Sin categoría"; }} detalle={function(p){ return (p.medidas || (p.alto+"x"+p.ancho+" cm")) + " · " + fmt(p.precio); }} onCerrar={() => setOrdenando(false)}/>}
+      {ordenando && sub==="molduras" && <OrdenadorCatalogo titulo="molduras" items={molduras} setItems={setMolduras} detalle={function(m){ return fmt(m.precio_ml) + "/ML"; }} onCerrar={() => setOrdenando(false)}/>}
+      {ordenando && sub==="insumos" && <OrdenadorCatalogo titulo="insumos" items={insumos} setItems={setInsumos} grupoDe={function(m){ return m.cat; }} gruposFijos={CATS_INS.map(function(c){ return {id:c.id, label:(c.icon?c.icon+" ":"")+c.label}; })} detalle={function(m){ return fmt(m.precio) + "/m²"; }} onCerrar={() => setOrdenando(false)}/>}
+      {!ordenando && sub==="stock" && <StockAgrupado stock={stock} setStock={setStock} IS={IS} updSt={updSt} molduras={molduras} insumos={insumos} temas={temas}/>}
+      {!ordenando && sub==="molduras" && (
         <div style={{overflowX:"auto"}}>
           <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}>
             <button onClick={function(){
-              const nuevo = {id:"m"+uid(),nombre:"Nueva moldura",costo_ml:0,margen:0.50,precio_ml:0,desperdicio:15};
+              const nuevo = {id:"m"+uid(),nombre:"Nueva moldura",costo_ml:0,margen:0.50,precio_ml:0,desperdicio:15,orden:siguienteOrden(molduras)};
               setMolduras(function(prev){ return [nuevo].concat(Array.isArray(prev)?prev:[]); });
             }} style={{background:T.header,color:"#fff",border:"none",borderRadius:7,padding:"7px 16px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:600}}>+ Agregar moldura</button>
           </div>
@@ -4665,11 +4806,11 @@ function TabBases({insumos, setInsumos, molduras, setMolduras, stock, setStock, 
           <div style={{color:T.textFade,fontSize:11,fontFamily:FS,marginTop:8}}>Precio/ML = Costo ÷ (1 − Margen%)</div>
         </div>
       )}
-      {sub==="insumos" && (
+      {!ordenando && sub==="insumos" && (
         <div style={{overflowX:"auto"}}>
           <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}>
             <button onClick={function(){
-              const nuevo = {id:"i"+uid(),nombre:"Nuevo insumo",cat:"impresion",costo:0,margen:0.40,precio:0};
+              const nuevo = {id:"i"+uid(),nombre:"Nuevo insumo",cat:"impresion",costo:0,margen:0.40,precio:0,orden:siguienteOrden(insumos)};
               setInsumos(function(prev){ return [nuevo].concat(Array.isArray(prev)?prev:[]); });
             }} style={{background:T.header,color:"#fff",border:"none",borderRadius:7,padding:"7px 16px",cursor:"pointer",fontFamily:FS,fontSize:12,fontWeight:600}}>+ Agregar insumo</button>
           </div>
@@ -6759,10 +6900,10 @@ function App() {
           if (cg.length > 0) setCatGastos(cg);
         }
         if (data.proveedores_registro && data.proveedores_registro.length > 0) setProveedoresReg(asegurarIds(data.proveedores_registro, 'pv'));
-        if (data.stock && data.stock.length > 0) setStock(data.stock);
-        if (data.insumos && data.insumos.length > 0) setInsumos(data.insumos);
+        if (data.stock && data.stock.length > 0) setStock(ordenarCatalogo(data.stock));
+        if (data.insumos && data.insumos.length > 0) setInsumos(ordenarCatalogo(data.insumos));
         if (data.molduras && data.molduras.length > 0) {
-          setMolduras(data.molduras);
+          setMolduras(ordenarCatalogo(data.molduras));
         }
         if (data.temas && data.temas.length > 0) setTemas(data.temas);
         setCargando(false);
@@ -6786,12 +6927,13 @@ function App() {
       proveedores_registro: setProveedoresReg, stock: setStock, insumos: setInsumos,
       molduras: setMolduras, temas: setTemas
     };
-    function aplicar(setter, tipo, obj, id) {
+    function aplicar(setter, tipo, obj, id, ordenar) {
       setter(function(prev) {
         const lista = prev || [];
         if (tipo === "DELETE") return lista.filter(function(x){ return String(x.id) !== id; });
         const ya = lista.some(function(x){ return String(x.id) === id; });
-        return ya ? lista.map(function(x){ return String(x.id) === id ? obj : x; }) : lista.concat([obj]);
+        const nueva = ya ? lista.map(function(x){ return String(x.id) === id ? obj : x; }) : lista.concat([obj]);
+        return ordenar ? ordenarCatalogo(nueva) : nueva;
       });
     }
     const canal = suscribirCambios(function(tabla, tipo, obj, id, existia) {
@@ -6803,7 +6945,7 @@ function App() {
       const setter = setters[tabla];
       if (!setter) return;
       if (tabla === "pedidos" && obj) obj = normalizarPedido(obj);
-      aplicar(setter, tipo, obj, id);
+      aplicar(setter, tipo, obj, id, CATALOGOS_ORDENABLES.indexOf(tabla) >= 0);
       if (tabla === "pedidos" && tipo === "INSERT" && !existia) {
         setAvisoPedidos(function(prev) {
           const folios = (prev ? prev.folios : []).concat([String(obj.folio)]);
