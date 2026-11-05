@@ -2854,8 +2854,13 @@ function ModalConvertir({cotizacion, nextFolio, onClose, onConfirmar}) {
   const productosIniciales = productosOrig.length > 0
     ? productosOrig.map(function(p){return Object.assign({},p);})
     : itemsOrig.map(function(it,i){return {id:it.productoId||("p"+i), titulo:it.nombre||"Producto "+(i+1), nota:""};});
-  const [fechaEnt, setFE] = useState("");
+  const fechaCot = String(cotizacion.fechaEntrega||"").slice(0,10);
+  const [fechaEnt, setFE] = useState(/^\d{4}-\d{2}-\d{2}$/.test(fechaCot) && fechaCot >= HOY ? fechaCot : "");
   const [notaPed, setNotaPed] = useState("Desde C-"+cotizacion.folio);
+  // Totales reales (mismo cálculo que usa el pedido)
+  const descPct = parseFloat(cotizacion.descuentoPct)||0;
+  const subtotalCot = calcularTotal({items:itemsOrig, productos:productosIniciales, descuentoPct:0});
+  const totalCot = calcularTotal({items:itemsOrig, productos:productosIniciales, descuentoPct:descPct});
   const [productos, setProds] = useState(productosIniciales);
   const [anticipo, setAnt] = useState("");
   const [metodo, setMet] = useState("Efectivo");
@@ -2865,6 +2870,7 @@ function ModalConvertir({cotizacion, nextFolio, onClose, onConfirmar}) {
   }
   function aplicar() {
     if (!fechaEnt) { alert("La fecha de entrega es obligatoria"); return; }
+    if ((parseFloat(anticipo)||0) > totalCot + 0.5) { alert("El anticipo ("+fmt(anticipo)+") es mayor al total con descuento ("+fmt(totalCot)+")."); return; }
     // Re-tag items con productoId si no lo tienen
     const itemsTagged = itemsOrig.map(function(it,i){
       const pid = it.productoId || (productosIniciales[i] && productosIniciales[i].id) || ("p"+i);
@@ -2886,7 +2892,18 @@ function ModalConvertir({cotizacion, nextFolio, onClose, onConfirmar}) {
         <div>
           <div style={{background:T.bgDark,borderRadius:8,padding:"10px 13px",marginBottom:12,border:"1px solid "+T.border}}>
             <div style={{fontFamily:FONT,fontSize:12,fontWeight:700,marginBottom:6,color:T.textSub}}>Cliente: {cotizacion.cliente}</div>
-            <div style={{fontFamily:FS,fontSize:11,color:T.textFade,marginBottom:8}}>Tel: {cotizacion.tel||"—"} · Total: <span style={{color:T.amber,fontWeight:700,fontSize:13,fontFamily:FONT}}>{fmt(cotizacion.total)}</span></div>
+            <div style={{fontFamily:FS,fontSize:11,color:T.textFade,marginBottom:6}}>Tel: {cotizacion.tel||"—"}</div>
+            {descPct > 0 && (
+              <div style={{fontFamily:FS,fontSize:12,color:T.textSub,lineHeight:1.6}}>
+                <div style={{display:"flex",justifyContent:"space-between"}}><span>Subtotal</span><span>{fmt(subtotalCot)}</span></div>
+                <div style={{display:"flex",justifyContent:"space-between",color:T.green,fontWeight:600}}><span>Descuento {descPct}%</span><span>−{fmt(subtotalCot - totalCot)}</span></div>
+              </div>
+            )}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",borderTop:descPct>0?"1px solid "+T.border:"none",marginTop:descPct>0?4:0,paddingTop:descPct>0?4:0}}>
+              <span style={{fontFamily:FS,fontSize:12,fontWeight:700,color:T.text}}>Total del pedido</span>
+              <span style={{color:T.amber,fontWeight:700,fontSize:15,fontFamily:FONT}}>{fmt(totalCot)}</span>
+            </div>
+            <div style={{fontFamily:FS,fontSize:11,color:"#1565C0",marginTop:6}}>➜ Se creará directo en <strong>Producción (En taller)</strong></div>
           </div>
           <Inp label="Fecha de entrega *" value={fechaEnt} onChange={e => setFE(e.target.value)} type="date"/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
@@ -7051,7 +7068,8 @@ function App() {
       fechaEntrega:datos.fechaEntrega,
       items:datos.items, productos:datos.productos,
       anticipo:datos.anticipo, metodoPago:datos.metodoPago,
-      estado:"Pendiente", nota:datos.nota,
+      descuentoPct: parseFloat(c.descuentoPct)||0,
+      estado:"Produccion", nota:datos.nota,
       imagen:null, fecha:HOY
     };
     setPedidos(function(ps) { return ps.concat([nuevo]); });
